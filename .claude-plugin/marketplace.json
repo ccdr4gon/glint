@@ -1,0 +1,16 @@
+{
+  "name": "prompt-optimizer",
+  "owner": {
+    "name": "ccdr4gon"
+  },
+  "metadata": {
+    "description": "Personal Claude Code plugins for writing better prompts"
+  },
+  "plugins": [
+    {
+      "name": "glint",
+      "source": "./plugins/glint",
+      "description": "Grammar lint for your prompts: check their English before sending (Alt+Enter), with phrase lookups and a mistake journal"
+    }
+  ]
+}

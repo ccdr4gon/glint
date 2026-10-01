@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>English Coach</title>
+<!--
+  English Coach panel. Self-contained: no frameworks, fonts, images or network.
+
+  Host (frameless WebView2, 480 x 490 default, min 420 x 330, opens bottom-right):
+  - WebView2 DefaultBackgroundColor = transparent; window backdrop = Acrylic
+    (DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW).
+  - DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND gives the 8 px corners and the soft
+    system shadow; this page draws the matching radius, hairline border and tint.
+  - WS_EX_NOACTIVATE + WS_EX_TOPMOST so the cursor stays in Claude's message box.
+  - Resize borders are the host's job (WM_NCHITTEST); the title bar uses app-region: drag.
+
+  API
+    window.coach.render(state)        state shapes:
+      { view: 'welcome' }
+      { view: 'checking' }
+      { view: 'check', mistakes: [{ original, better, reason, state }], suggestions: [...], natural, notEnglish }
+        state: 'can' (Apply button) | 'applied' | 'fixed' (an overlapping fix changed these words)
+               | 'no' (words no longer in the message). After an apply, call render() again with the
+               same fixes and new states: they update in place, without rebuilding the list.
+      { view: 'lookup', question, answer, streaming }   call again with the growing answer
+      { view: 'message', title, body }
+      any state may also carry: status, canUseFix, pinned
+    window.coach.setTheme('light' | 'dark' | 'system')   default: system (prefers-color-scheme)
+    window.coach.setGlass(true | false | 'system')        false = solid fallback; default follows
+                                                          prefers-reduced-transparency
+  Posts via window.chrome.webview.postMessage:
+    { type: 'useFix' }  { type: 'ask', text }  { type: 'pin', on }  { type: 'close' }
+    { type: 'apply', index }   index = fix number from 1, mistakes first, then suggestions
+  Panel keys: Alt+F (use fixed version), Esc (hide). No Alt+number keys.
+
+  ?demo shows a demo bar. ?demo=<state>&theme=dark&solid=1&bar=0 renders one state full-window.
+-->
+<style>
+:root {
+  --font: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  /* Light. One tint over the whole panel. Worst case (pure black behind the glass):
+     text 10.3:1, muted 4.8:1, red / green / amber 4.7:1 or better. */
+  --glass-base: rgba(243, 243, 243, 0.82);
+  --glass-layer: transparent;
+  --solid-base: #f3f3f3;
+  --solid-layer: #fbfbfb;
+  --text: #1a1a1a;
+  --muted: #505050;
+  --red: #9e2018;
+  --green: #0a5e0a;
+  --amber: #784600;
+  --accent: #00539f;
+  --accent-hover: #1a64aa;
+  --accent-press: #3a78b5;
+  --on-accent: #ffffff;
+  --border: rgba(0, 0, 0, 0.14);
+  --divider: rgba(0, 0, 0, 0.08);
+  --card: rgba(255, 255, 255, 0.45);
+  --card-stroke: rgba(0, 0, 0, 0.07);
+  --control: rgba(255, 255, 255, 0.7);
+  --control-hover: rgba(249, 249, 249, 0.6);
+  --control-focus: #ffffff;
+  --control-stroke: rgba(0, 0, 0, 0.07);
+  --control-stroke-bottom: rgba(0, 0, 0, 0.16);
+  --strong-stroke: rgba(0, 0, 0, 0.45);
+  --subtle-hover: rgba(0, 0, 0, 0.05);
+  --subtle-press: rgba(0, 0, 0, 0.035);
+  --disabled-bg: rgba(0, 0, 0, 0.12);
+  --disabled-text: rgba(0, 0, 0, 0.42);
+  --skel: rgba(0, 0, 0, 0.07);
+  --shine: rgba(255, 255, 255, 0.7);
+  --thumb: rgba(0, 0, 0, 0.3);
+  --tint-base: var(--glass-base);
+  --tint-layer: var(--glass-layer);
+}
+/* Dark. Worst case (pure white behind the glass): text 8.8:1, muted 4.7:1, red / green 4.8:1,
+   amber 7.0:1. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --glass-base: rgba(32, 32, 32, 0.84);
+    --glass-layer: transparent;
+    --solid-base: #202020;
+    --solid-layer: #2b2b2b;
+    --text: #f3f3f3;
+    --muted: #b4b4b4;
+    --red: #ff99a4;
+    --green: #6ccb5f;
+    --amber: #ffd580;
+    --accent: #60cdff;
+    --accent-hover: #5ab9e6;
+    --accent-press: #52a7cf;
+    --on-accent: #000000;
+    --border: rgba(255, 255, 255, 0.12);
+    --divider: rgba(255, 255, 255, 0.08);
+    --card: rgba(255, 255, 255, 0.05);
+    --card-stroke: rgba(255, 255, 255, 0.07);
+    --control: rgba(255, 255, 255, 0.06);
+    --control-hover: rgba(255, 255, 255, 0.085);
+    --control-focus: rgba(30, 30, 30, 0.9);
+    --control-stroke: rgba(255, 255, 255, 0.07);
+    --control-stroke-bottom: rgba(255, 255, 255, 0.05);
+    --strong-stroke: rgba(255, 255, 255, 0.54);
+    --subtle-hover: rgba(255, 255, 255, 0.06);
+    --subtle-press: rgba(255, 255, 255, 0.04);
+    --disabled-bg: rgba(255, 255, 255, 0.16);
+    --disabled-text: rgba(255, 255, 255, 0.53);
+    --skel: rgba(255, 255, 255, 0.07);
+    --shine: rgba(255, 255, 255, 0.08);
+    --thumb: rgba(255, 255, 255, 0.35);
+  }
+}
+:root[data-theme="dark"] {
+  --glass-base: rgba(32, 32, 32, 0.84);
+  --glass-layer: transparent;
+  --solid-base: #202020;
+  --solid-layer: #2b2b2b;
+  --text: #f3f3f3;
+  --muted: #b4b4b4;
+  --red: #ff99a4;
+  --green: #6ccb5f;
+  --amber: #ffd580;
+  --accent: #60cdff;
+  --accent-hover: #5ab9e6;
+  --accent-press: #52a7cf;
+  --on-accent: #000000;
+  --border: rgba(255, 255, 255, 0.12);
+  --divider: rgba(255, 255, 255, 0.08);
+  --card: rgba(255, 255, 255, 0.05);
+  --card-stroke: rgba(255, 255, 255, 0.07);
+  --control: rgba(255, 255, 255, 0.06);
+  --control-hover: rgba(255, 255, 255, 0.085);
+  --control-focus: rgba(30, 30, 30, 0.9);
+  --control-stroke: rgba(255, 255, 255, 0.07);
+  --control-stroke-bottom: rgba(255, 255, 255, 0.05);
+  --strong-stroke: rgba(255, 255, 255, 0.54);
+  --subtle-hover: rgba(255, 255, 255, 0.06);
+  --subtle-press: rgba(255, 255, 255, 0.04);
+  --disabled-bg: rgba(255, 255, 255, 0.16);
+  --disabled-text: rgba(255, 255, 255, 0.53);
+  --skel: rgba(255, 255, 255, 0.07);
+  --shine: rgba(255, 255, 255, 0.08);
+  --thumb: rgba(255, 255, 255, 0.35);
+}
+/* Solid fallback: Windows transparency effects off (or forced with setGlass(false)). */
+@media (prefers-reduced-transparency: reduce) {
+  :root:not([data-glass="on"]) { --tint-base: var(--solid-base); --tint-layer: var(--solid-layer); }
+}
+:root[data-glass="off"] { --tint-base: var(--solid-base); --tint-layer: var(--solid-layer); }
+
+html, body { margin: 0; height: 100%; background: transparent; }
+body {
+  font: 14px/1.45 var(--font);
+  color: var(--text);
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+  -webkit-font-smoothing: antialiased;
+}
+button, input { font: inherit; color: inherit; }
+
+#frame { position: fixed; inset: 0; }
+#panel {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  box-sizing: border-box;
+  background: var(--tint-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Title bar: the drag area */
+.titlebar {
+  position: relative;
+  flex: none; height: 36px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 4px 0 12px;
+  -webkit-app-region: drag; app-region: drag;
+}
+.glyph {
+  flex: none; width: 16px; height: 16px;
+  border-radius: 4px 4px 4px 1px;
+  background: var(--accent); color: var(--on-accent);
+  font: 700 10px/16px var(--font); text-align: center;
+}
+.app-title { font-size: 12px; white-space: nowrap; }
+.state {
+  display: flex; align-items: center; gap: 6px;
+  margin-left: 4px; padding-left: 10px;
+  border-left: 1px solid var(--divider);
+  font-size: 12px; line-height: 16px; color: var(--muted); white-space: nowrap;
+}
+.state .dot { width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1.25px var(--muted); }
+.state[data-k="busy"] .dot { background: var(--accent); box-shadow: none; animation: pulse 1.2s ease-in-out infinite; }
+.state[data-k="done"] .dot { background: var(--green); box-shadow: none; }
+.spacer { flex: 1; }
+.tb-btn {
+  -webkit-app-region: no-drag; app-region: no-drag;
+  flex: none; width: 36px; height: 28px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 4px; background: transparent; color: var(--text);
+}
+.tb-btn:hover { background: var(--subtle-hover); }
+.tb-btn:active { background: var(--subtle-press); color: var(--muted); }
+.tb-btn svg { width: 16px; height: 16px; display: block; }
+.tb-btn .pin-on { display: none; }
+.tb-btn[aria-pressed="true"] { color: var(--accent); }
+.tb-btn[aria-pressed="true"] .pin-on { display: block; }
+.tb-btn[aria-pressed="true"] .pin-off { display: none; }
+.progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; opacity: 0; transition: opacity .2s; }
+.progress::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 34%;
+  border-radius: 2px; background: var(--accent);
+  animation: slide 1.5s cubic-bezier(.45, 0, .2, 1) infinite;
+}
+:root[data-busy] .progress { opacity: 1; }
+
+/* Content layer */
+.layer {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--tint-layer);
+  border-top: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+}
+.result {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 12px 16px 10px;
+  user-select: text; cursor: auto;
+  overscroll-behavior: contain;
+}
+.result::-webkit-scrollbar { width: 12px; }
+.result::-webkit-scrollbar-thumb { background: var(--thumb); border: 4px solid transparent; background-clip: padding-box; border-radius: 6px; }
+.result::-webkit-scrollbar-track { background: transparent; }
+.result ::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+.head { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.head h1 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 600; text-wrap: pretty; }
+.mark { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.mark.fix, .mark.busy { background: var(--accent); }
+.mark.idea { background: var(--amber); }
+.mark.good { background: var(--green); }
+.mark.busy { animation: pulse 1.2s ease-in-out infinite; }
+.p { margin: 0 0 8px; text-wrap: pretty; }
+.p.muted { color: var(--muted); }
+.k {
+  display: inline-block; padding: 0 5px; margin: 0 1px;
+  border: 1px solid var(--card-stroke); border-bottom-width: 2px; border-radius: 4px;
+  background: var(--card); font-size: 12px; font-weight: 600; line-height: 18px; white-space: nowrap;
+}
+.items { display: flex; flex-direction: column; gap: 12px; }
+.pair { text-wrap: pretty; }
+.orig { color: var(--text); }
+del.orig { color: var(--red); text-decoration: line-through 1px var(--red); }
+.arrow { color: var(--muted); margin: 0 6px; }
+.better { text-decoration: none; color: var(--green); font-weight: 600; }
+.idea .better { color: var(--amber); }
+.meta { display: flex; align-items: baseline; gap: 12px; margin-top: 2px; }
+.reason { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.4; color: var(--muted); text-wrap: pretty; }
+.slot { flex: none; display: flex; align-items: baseline; }
+.slot:empty { display: none; }
+.apply {
+  height: 22px; margin: -3px 0; padding: 0 10px;
+  border: 1px solid var(--control-stroke); border-bottom-color: var(--control-stroke-bottom); border-radius: 4px;
+  background: var(--control); color: var(--text);
+  font-size: 12px; line-height: 20px; user-select: none;
+}
+.apply:hover { background: var(--control-hover); }
+.apply:active { color: var(--muted); }
+.done { font-size: 12px; line-height: 17px; font-weight: 600; white-space: nowrap; color: var(--muted); }
+.done.applied { color: var(--green); }
+.idea .done.applied { color: var(--amber); }
+.slot.in > * { animation: slotIn .26s cubic-bezier(.2, 0, 0, 1) both; }
+.slot.out > * { opacity: 0; transform: scale(.96); transition: opacity .14s ease-in, transform .14s ease-in; }
+.status.in { animation: fadeIn .3s ease-out; }
+.label {
+  margin: 14px 0 6px;
+  font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted);
+}
+.label.first { margin-top: 0; }
+.card {
+  padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--card-stroke); border-radius: 6px;
+  line-height: 1.5; text-wrap: pretty;
+}
+.question { text-wrap: pretty; }
+.answer {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--divider);
+  white-space: pre-wrap; line-height: 1.55;
+}
+.answer.streaming::after {
+  content: ""; display: inline-block; width: 7px; height: 15px; margin-left: 2px;
+  vertical-align: -2px; border-radius: 1px; background: var(--accent);
+  animation: blink 1s steps(1) infinite;
+}
+.skel { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.skel i { position: relative; display: block; height: 10px; border-radius: 5px; background: var(--skel); overflow: hidden; }
+.skel i::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, var(--shine), transparent);
+  transform: translateX(-100%); animation: shimmer 1.6s ease-in-out infinite;
+}
+
+/* Action row */
+.actions { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 12px 10px 16px; }
+.status { flex: 1; min-width: 0; font-size: 12px; line-height: 16px; color: var(--muted); text-wrap: pretty; }
+.btn-accent {
+  flex: none; height: 32px; padding: 0 6px 0 12px;
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid transparent; border-radius: 4px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 13px; white-space: nowrap;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .2);
+}
+.btn-accent:hover { background: var(--accent-hover); }
+.btn-accent:active { background: var(--accent-press); box-shadow: none; }
+.btn-accent .cap {
+  padding: 0 5px; border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--on-accent) 35%, transparent);
+  font-size: 11px; line-height: 16px; font-weight: 600;
+}
+.btn-accent:disabled { background: var(--disabled-bg); color: var(--disabled-text); box-shadow: none; }
+.btn-accent:disabled .cap { border-color: currentColor; }
+
+/* Ask box */
+.ask { flex: none; display: flex; gap: 8px; padding: 10px 12px 6px; }
+.input {
+  flex: 1; min-width: 0; height: 32px; box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--control-stroke); border-bottom-color: var(--strong-stroke); border-radius: 4px;
+  background: var(--control);
+  font-size: 13px; outline: none;
+  user-select: text;
+}
+.input::placeholder { color: var(--muted); opacity: 1; }
+.input:hover { background: var(--control-hover); }
+.input:focus { background: var(--control-focus); border-bottom: 2px solid var(--accent); }
+.btn {
+  flex: none; height: 32px; padding: 0 16px;
+  border: 1px solid var(--control-stroke); border-bottom-color: var(--control-stroke-bottom); border-radius: 4px;
+  background: var(--control); font-size: 13px;
+}
+.btn:hover { background: var(--control-hover); }
+.btn:active { color: var(--muted); }
+button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+
+/* Hints */
+.hints {
+  flex: none; display: flex; align-items: center; gap: 6px;
+  padding: 2px 16px 10px;
+  font-size: 11px; line-height: 14px; color: var(--muted);
+  white-space: nowrap; overflow: hidden;
+}
+.hints b { font-weight: 600; }
+
+@keyframes pulse { 50% { opacity: .35; } }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@keyframes shimmer { to { transform: translateX(100%); } }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes slotIn { from { opacity: 0; transform: translateY(3px) scale(.94); } }
+@keyframes fadeIn { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .progress::before { width: 100%; opacity: .6; }
+}
+
+/* Demo only (?demo). Not used in the app. */
+#demobar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+  padding: 8px 12px;
+  background: #1c1c1c; color: #e8e8e8;
+  font: 12px/1.3 var(--font);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .08);
+}
+#demobar[hidden] { display: none; }
+#demobar .grp { display: flex; flex-wrap: wrap; gap: 4px; padding-right: 8px; margin-right: 2px; border-right: 1px solid #3a3a3a; }
+#demobar .grp:last-of-type { border-right: 0; }
+#demobar button { padding: 4px 9px; border: 1px solid #3a3a3a; border-radius: 4px; background: #2a2a2a; color: #e8e8e8; font-size: 12px; }
+#demobar button:hover { background: #333; }
+#demobar button[aria-pressed="true"] { background: #60cdff; border-color: #60cdff; color: #000; }
+#demolog { flex-basis: 100%; color: #a8a8a8; font-family: Consolas, monospace; font-size: 11px; min-height: 14px; }
+body.demo #frame {
+  inset: auto; top: 112px; left: 24px;
+  width: 480px; height: 490px; min-width: 420px; min-height: 330px;
+  resize: both; overflow: hidden; border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .3), 0 2px 8px rgba(0, 0, 0, .18);
+}
+/* Stand-in for the OS Acrylic blur while reviewing in a browser. The app never uses this. */
+body.demo.sim #frame { -webkit-backdrop-filter: blur(30px) saturate(1.3); backdrop-filter: blur(30px) saturate(1.3); }
+body.demo[data-bd="wall"] {
+  background:
+    radial-gradient(circle at 20% 22%, #ffd23f 0 60px, transparent 61px),
+    radial-gradient(circle at 86% 16%, #ffffff 0 46px, transparent 47px),
+    radial-gradient(circle at 72% 82%, #0b0b0b 0 120px, transparent 121px),
+    radial-gradient(circle at 28% 78%, #ff4d6d 0 90px, transparent 91px),
+    repeating-linear-gradient(120deg, #fafafa 0 14px, #0d0d0d 14px 28px) 0 52% / 100% 130px no-repeat,
+    conic-gradient(from 200deg at 60% 45%, #3a0ca3, #f72585, #ff9e00, #06d6a0, #118ab2, #3a0ca3);
+}
+body.demo[data-bd="white"] { background: #ffffff; }
+body.demo[data-bd="code"] { background: #1e1e1e; }
+#democode { position: fixed; inset: 0; margin: 0; padding: 104px 0 0 24px; font: 13px/20px Consolas, monospace; color: #d4d4d4; white-space: pre; overflow: hidden; }
+#democode[hidden] { display: none; }
+</style>
+</head>
+<body>
+<pre id="democode" hidden></pre>
+<div id="frame">
+  <div id="panel">
+    <header class="titlebar">
+      <span class="glyph" aria-hidden="true">E</span>
+      <span class="app-title">English Coach</span>
+      <span class="state" id="state" data-k="idle" role="status"><span class="dot"></span><span id="stateLabel">Ready</span></span>
+      <span class="spacer"></span>
+      <button class="tb-btn" id="pin" type="button" aria-pressed="true" title="Keep on top: on">
+        <svg class="pin-off" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"><g transform="rotate(45 8 8)"><rect x="5" y="1.5" width="6" height="2" rx=".6"></rect><rect x="6" y="3.5" width="4" height="4.5"></rect><rect x="3.5" y="8" width="9" height="1.6" rx=".6"></rect><path d="M8 9.6V15" stroke-linecap="round"></path></g></svg>
+        <svg class="pin-on" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"><g transform="rotate(45 8 8)"><rect x="5" y="1.5" width="6" height="2" rx=".6"></rect><rect x="6" y="3.5" width="4" height="4.5"></rect><rect x="3.5" y="8" width="9" height="1.6" rx=".6"></rect><path d="M8 9.6V15" stroke-linecap="round"></path></g></svg>
+      </button>
+      <button class="tb-btn" id="close" type="button" title="Hide (keeps running in the tray)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg>
+      </button>
+      <div class="progress" aria-hidden="true"></div>
+    </header>
+    <main class="layer">
+      <section class="result" id="result" aria-live="polite"></section>
+      <div class="actions">
+        <span class="status" id="status"></span>
+        <button class="btn-accent" id="useFix" type="button" disabled>Use fixed version <span class="cap">Alt+F</span></button>
+      </div>
+    </main>
+    <form class="ask" id="ask" autocomplete="off">
+      <input class="input" id="askInput" type="text" spellcheck="false" placeholder='Ask about English, e.g. is "revert back" correct?' aria-label="Ask about English">
+      <button class="btn" type="submit">Ask</button>
+    </form>
+    <footer class="hints" aria-label="Keyboard shortcuts">
+      <span><b>Alt+Enter</b> check</span><span>·</span>
+      <span><b>Alt+F</b> use all</span><span>·</span>
+      <span><b>Ctrl+Alt+E</b> show/hide</span><span>·</span>
+      <span><b>Esc</b> hide</span>
+    </footer>
+  </div>
+</div>
+<div id="demobar" hidden></div>
+<script>
+(function () {
+  'use strict';
+  var root = document.documentElement;
+  var $ = function (id) { return document.getElementById(id); };
+  var resultEl = $('result'), statusEl = $('status'), fixBtn = $('useFix');
+  var stateEl = $('state'), stateLabel = $('stateLabel'), pinBtn = $('pin');
+  var askForm = $('ask'), askInput = $('askInput');
+  var current = null, answerEl = null, pinned = true, canFix = false, demoAction = null;
+  var slots = [], fixNo = 0, lastKey = null;
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  function h(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  // Plain text with shortcut names shown as keycaps. The text itself is unchanged.
+  function rich(cls, text) {
+    var p = h('p', cls);
+    String(text || '').split(/(Ctrl\+Alt\+E|Alt\+Enter|Alt\+F)/).forEach(function (part, i) {
+      if (!part) return;
+      p.appendChild(i % 2 ? h('kbd', 'k', part) : document.createTextNode(part));
+    });
+    return p;
+  }
+  function heading(text, tone) {
+    var d = h('div', 'head');
+    d.appendChild(h('span', 'mark ' + (tone || '')));
+    d.appendChild(h('h1', null, text));
+    return d;
+  }
+  function item(it, kind) {
+    var index = ++fixNo, w = h('div', 'item ' + kind), p = h('div', 'pair');
+    p.appendChild(h(kind === 'fix' ? 'del' : 'span', 'orig', it.original));
+    p.appendChild(h('span', 'arrow', '→'));
+    p.appendChild(h(kind === 'fix' ? 'ins' : 'span', 'better', it.better));
+    w.appendChild(p);
+    var meta = h('div', 'meta'), slot = h('div', 'slot');
+    meta.appendChild(h('div', 'reason', it.reason || ''));
+    meta.appendChild(slot);
+    fill(slot, it, index);
+    slots.push({ el: slot, state: it.state, index: index });
+    w.appendChild(meta);
+    return w;
+  }
+  // The per-fix state: an Apply button, a done label, or nothing.
+  function fill(slot, it, index) {
+    slot.replaceChildren();
+    if (it.state === 'can') {
+      var b = h('button', 'apply', 'Apply');
+      b.type = 'button';
+      b.title = 'Change only these words in Claude';
+      b.setAttribute('aria-label', 'Apply fix ' + index + ': ' + it.better);
+      b.addEventListener('mousedown', function (e) { e.preventDefault(); });
+      b.addEventListener('click', function () {
+        if (b.dataset.sent) return;
+        b.dataset.sent = '1';
+        post({ type: 'apply', index: index });
+      });
+      slot.appendChild(b);
+    } else if (it.state === 'applied') slot.appendChild(h('span', 'done applied', '✓ Applied'));
+    else if (it.state === 'fixed') slot.appendChild(h('span', 'done fixed', '✓ Already fixed'));
+  }
+  function swap(el, refill) {
+    clearTimeout(el._t);
+    el.classList.remove('in', 'out');
+    if (reduce.matches) { refill(); return; }
+    var enter = function () { refill(); void el.offsetWidth; el.classList.add('in'); };
+    if (el.firstChild) {
+      el.classList.add('out');
+      el._t = setTimeout(function () { el.classList.remove('out'); enter(); }, 140);
+    } else enter();
+  }
+  // Same check, new states: update each fix in place so several can change at once.
+  function updateSlots(s) {
+    arr(s.mistakes).concat(arr(s.suggestions)).forEach(function (it, i) {
+      var sl = slots[i];
+      if (!sl) return;
+      if (sl.state === it.state) {
+        var b = sl.el.querySelector('.apply');
+        if (b) delete b.dataset.sent;
+        return;
+      }
+      sl.state = it.state;
+      swap(sl.el, function () { fill(sl.el, it, sl.index); });
+    });
+  }
+  function checkKey(s) {
+    var pairs = function (a) { return arr(a).map(function (f) { return [f.original, f.better]; }); };
+    return JSON.stringify([!!s.notEnglish, s.natural || '', pairs(s.mistakes), pairs(s.suggestions)]);
+  }
+  function list(arr, kind) {
+    var d = h('div', 'items');
+    arr.forEach(function (it) { d.appendChild(item(it, kind)); });
+    return d;
+  }
+  function post(msg) {
+    var wv = window.chrome && window.chrome.webview;
+    if (wv) wv.postMessage(msg);
+    if (demoAction) demoAction(msg);
+  }
+  function arr(a) { return Array.isArray(a) ? a : []; }
+
+  function build(s) {
+    var out = [];
+    switch (s.view) {
+      case 'checking':
+        out.push(heading('Checking your message…', 'busy'));
+        var sk = h('div', 'skel');
+        [92, 74, 84, 48].forEach(function (w) { var i = h('i'); i.style.width = w + '%'; sk.appendChild(i); });
+        out.push(sk);
+        break;
+      case 'check': {
+        var m = arr(s.mistakes), g = arr(s.suggestions);
+        if (s.notEnglish) {
+          out.push(heading('In English', 'fix'));
+          out.push(h('div', 'card', s.natural || ''));
+          break;
+        }
+        if (m.length) {
+          out.push(heading(m.length === 1 ? '1 thing to fix' : m.length + ' things to fix', 'fix'));
+          out.push(list(m, 'fix'));
+          if (g.length) { out.push(h('div', 'label', 'Optional ideas')); out.push(list(g, 'idea')); }
+        } else if (g.length) {
+          out.push(heading('No mistakes', 'good'));
+          out.push(h('div', 'label', 'Optional ideas to sound more natural'));
+          out.push(list(g, 'idea'));
+        } else {
+          out.push(heading('Looks good', 'good'));
+          out.push(h('p', 'p muted', 'No mistakes found.'));
+          break;
+        }
+        if (s.natural) { out.push(h('div', 'label', 'Natural version')); out.push(h('div', 'card', s.natural)); }
+        break;
+      }
+      case 'lookup':
+        out.push(h('div', 'label first', 'You asked'));
+        out.push(h('div', 'question', s.question || ''));
+        answerEl = h('div', 'answer' + (s.streaming ? ' streaming' : ''), s.answer || '');
+        out.push(answerEl);
+        break;
+      case 'message':
+        out.push(heading(s.title || '', 'muted'));
+        if (s.body) out.push(rich('p muted', s.body));
+        break;
+      default:
+        out.push(heading('English Coach is ready', 'fix'));
+        out.push(rich('p muted', 'In Claude, press Alt+Enter to check your message. Alt+F puts the fixed version into Claude. Type below to ask about any English word or phrase.'));
+    }
+    return out;
+  }
+  function defaultStatus(s) {
+    if (s.view === 'check') {
+      if (s.notEnglish) return 'Press Alt+F to put the English version into Claude. Then Enter to send.';
+      if (arr(s.mistakes).length) return 'Fix it in Claude, or press Alt+F. Then Enter to send.';
+      if (arr(s.suggestions).length) return 'Send it as it is, or press Alt+F for the natural version.';
+      return 'Press Enter in Claude to send.';
+    }
+    if (s.view === 'lookup' && s.streaming) return 'Answering…';
+    return '';
+  }
+  function defaultCanFix(s) {
+    return s.view === 'check' && !!s.natural && (!!s.notEnglish || arr(s.mistakes).length > 0 || arr(s.suggestions).length > 0);
+  }
+  function indicator(s) {
+    if (s.view === 'checking') return ['busy', 'Checking'];
+    if (s.view === 'lookup') return s.streaming ? ['busy', 'Answering'] : ['done', 'Answer'];
+    if (s.view === 'check') return ['done', 'Result'];
+    return ['idle', 'Ready'];
+  }
+  function setPinned(on, send) {
+    pinned = !!on;
+    pinBtn.setAttribute('aria-pressed', String(pinned));
+    pinBtn.title = pinned ? 'Keep on top: on' : 'Keep on top: off';
+    if (send) post({ type: 'pin', on: pinned });
+  }
+
+  function render(state) {
+    var s = state || { view: 'welcome' };
+    var sameLookup = s.view === 'lookup' && current && current.view === 'lookup' && current.question === s.question && answerEl;
+    var key = s.view === 'check' ? checkKey(s) : null;
+    var sameCheck = key !== null && key === lastKey && current && current.view === 'check';
+    if (sameLookup) {
+      var stick = resultEl.scrollHeight - resultEl.scrollTop - resultEl.clientHeight < 24;
+      answerEl.textContent = s.answer || '';
+      answerEl.classList.toggle('streaming', !!s.streaming);
+      if (stick) resultEl.scrollTop = resultEl.scrollHeight;
+    } else if (sameCheck) {
+      updateSlots(s);
+    } else {
+      answerEl = null;
+      slots = [];
+      fixNo = 0;
+      resultEl.replaceChildren.apply(resultEl, build(s));
+      resultEl.scrollTop = 0;
+    }
+    lastKey = key;
+    current = s;
+    root.toggleAttribute('data-busy', s.view === 'checking');
+    var st = s.status != null ? s.status : defaultStatus(s);
+    if (statusEl.textContent !== st) {
+      statusEl.textContent = st;
+      if (sameCheck && !reduce.matches) { statusEl.classList.remove('in'); void statusEl.offsetWidth; statusEl.classList.add('in'); }
+    }
+    canFix = s.canUseFix != null ? !!s.canUseFix : defaultCanFix(s);
+    fixBtn.disabled = !canFix;
+    if (s.pinned != null) setPinned(s.pinned, false);
+    var ind = indicator(s);
+    stateEl.setAttribute('data-k', ind[0]);
+    stateLabel.textContent = ind[1];
+  }
+
+  // Keep focus where it is when the title bar or fix button is clicked.
+  [pinBtn, $('close'), fixBtn].forEach(function (b) {
+    b.addEventListener('mousedown', function (e) { e.preventDefault(); });
+  });
+  pinBtn.addEventListener('click', function () { setPinned(!pinned, true); });
+  $('close').addEventListener('click', function () { post({ type: 'close' }); });
+  fixBtn.addEventListener('click', function () { if (canFix) post({ type: 'useFix' }); });
+  askForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var text = askInput.value.trim();
+    if (!text) return;
+    post({ type: 'ask', text: text });
+    askInput.value = '';
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.altKey && !e.ctrlKey && (e.key === 'f' || e.key === 'F')) {
+      e.preventDefault();
+      if (canFix) post({ type: 'useFix' });
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      post({ type: 'close' });
+    }
+  });
+
+  window.coach = {
+    render: render,
+    setTheme: function (t) {
+      if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t);
+      else root.removeAttribute('data-theme');
+    },
+    setGlass: function (on) {
+      if (on === true) root.setAttribute('data-glass', 'on');
+      else if (on === false) root.setAttribute('data-glass', 'off');
+      else root.removeAttribute('data-glass');
+    }
+  };
+  render({ view: 'welcome' });
+
+  /* ---------- Demo (?demo) ---------- */
+  var params = new URLSearchParams(location.search);
+  if (!params.has('demo')) return;
+
+  var MISTAKES = {
+    view: 'check',
+    mistakes: [
+      { original: 'I have ran the both commands', better: 'I have run both commands', reason: "Use 'have' + past participle 'run'; drop 'the'." },
+      { original: 'can help check', better: 'can you help me check', reason: "Include the subject 'you' in questions." }
+    ],
+    suggestions: [
+      { original: 'what to do next?', better: 'what should I do next?', reason: 'A bit more natural as a direct question.' }
+    ],
+    natural: 'I have run both commands. Can you help me check what I should do next?',
+    notEnglish: false,
+    status: 'Fix it in Claude, or press Alt+F. Then Enter to send.',
+    canUseFix: true
+  };
+  var LOOKUP_Q = 'how to say "this one cannot work already" politely to my lead';
+  var LOOKUP_A = 'Here are three polite ways to say it:\n\n' +
+    '1. "This doesn\'t seem to work anymore."\n   Soft and neutral. Good for a first message.\n\n' +
+    '2. "This approach no longer works. Could we look at another option?"\n   Polite, and it suggests a next step.\n\n' +
+    '3. "I\'m afraid this has stopped working. Do you have a few minutes to look at it with me?"\n   The most careful option, and it asks for help directly.\n\n' +
+    'Your question: "this one cannot work already" -> "This won\'t work anymore"';
+  var REVERT_A = '"Revert back" is common in speech, but "revert" already means "go back", so "back" is extra.\n\n' +
+    'In writing, use "revert" on its own:\n- "I reverted the commit."\n- "Can we revert to the previous version?"\n\n' +
+    'Your question: is "revert back" correct? -> "revert" is enough';
+  var DEMO = {
+    welcome: { view: 'welcome' },
+    checking: { view: 'checking' },
+    mistakes: MISTAKES,
+    ideas: {
+      view: 'check', mistakes: [],
+      suggestions: [{ original: 'what to do next?', better: 'what should I do next?', reason: 'A bit more natural as a direct question.' }],
+      natural: 'I have run both commands. Can you help me check what I should do next?', notEnglish: false
+    },
+    good: { view: 'check', mistakes: [], suggestions: [], natural: '', notEnglish: false, status: 'Press Enter in Claude to send.', canUseFix: false },
+    notenglish: { view: 'check', mistakes: [], suggestions: [], natural: 'Please help me figure out why this test keeps failing.', notEnglish: true, canUseFix: true },
+    lookup: { view: 'lookup', question: LOOKUP_Q, answer: LOOKUP_A, streaming: false, status: 'Answered in 3.9 s', canUseFix: false },
+    nothing: { view: 'message', title: 'Nothing to check', body: 'Type your message in Claude first, then press Alt+Enter.' },
+    failed: { view: 'message', title: 'The check failed', body: 'the Claude CLI is not logged in. Run claude in a terminal and use /login.' },
+    long: {
+      view: 'check',
+      mistakes: [
+        { original: 'yesterday I already deploy', better: 'yesterday I deployed', reason: "Use the past tense 'deployed' for something that happened yesterday." },
+        { original: 'staging got error', better: 'staging is showing an error', reason: "'Got error' can be misread; say what is happening." },
+        { original: 'I try to restart the pod but cannot', better: "I tried to restart the pod, but it didn't work", reason: "Use the past tense, and give 'cannot' a clear subject and verb." },
+        { original: 'the logs is showing', better: 'the logs are showing', reason: "'Logs' is plural, so use 'are'." },
+        { original: 'can advise how to fix?', better: 'could you tell me how to fix it?', reason: "Add 'you', and 'it' after 'fix'. 'Advise' sounds formal in chat." }
+      ],
+      suggestions: [{ original: 'Thanks in advance', better: 'Thanks!', reason: 'Shorter and friendlier in chat.' }],
+      natural: 'Yesterday I deployed the new build to staging, and now staging is showing an error whenever I open the orders page. I tried to restart the pod, but it didn\'t work. The logs are showing a timeout when the service connects to the database, and the retry count keeps going up. I checked the connection string and the secrets, and they look the same as in production. I also rolled back the last migration locally, and the error went away, so I think the migration might be the cause. Could you tell me how to fix it, or what I should check next? I can share the full logs and the migration file if that helps. Thanks!',
+      notEnglish: false, canUseFix: true
+    }
+  };
+  ['ideas', 'long'].forEach(function (k) {
+    DEMO[k].mistakes.concat(DEMO[k].suggestions).forEach(function (it) { it.state = 'can'; });
+  });
+
+  // Live stand-in for the host: keeps a draft, applies fixes to it, and recalculates every state.
+  var SIMS = {
+    mistakes: {
+      draft: 'I have ran the both commands, can help check what to do next?',
+      mistakes: MISTAKES.mistakes, suggestions: MISTAKES.suggestions, natural: MISTAKES.natural, pre: [1]
+    },
+    overlap: {
+      draft: 'give me a prompt about what you changes in the recent link test, cause the claude design already ouput one proto previously',
+      mistakes: [
+        { original: 'cause the claude design already ouput one proto previously', better: 'because Claude Design already output a prototype earlier', reason: "Write 'because' in full, capitalise the product name and fix 'output'." },
+        { original: 'ouput one proto', better: 'output a prototype', reason: "Fix the spelling, and say 'a prototype' instead of 'one proto'." },
+        { original: 'what you changes', better: 'what you changed', reason: "Use the past tense 'changed' after 'you'." }
+      ],
+      suggestions: [
+        { original: 'give me a prompt about what you changes in the recent link test', better: 'write me a prompt summarizing what you changed in the recent link test', reason: 'Says exactly what you want the prompt to do.' }
+      ],
+      natural: 'Please write me a prompt summarizing what you changed in the recent link test, because Claude Design already output a prototype earlier.',
+      pre: [1]
+    },
+    gone: {
+      draft: 'can help me check why the api is failing',
+      mistakes: [
+        { original: 'got error', better: 'is returning an error', reason: "'Got error' can be misread; say what is happening." },
+        { original: 'can help me check', better: 'can you help me check', reason: "Include the subject 'you' in questions." }
+      ],
+      suggestions: [],
+      natural: 'Can you help me check why the API is returning an error?',
+      status: '"got error" isn\'t in your message any more, so fix 1 can\'t be applied.'
+    }
+  };
+  var sim = null;
+  function simAll() { return sim.def.mistakes.concat(sim.def.suggestions); }
+  function simDo(i) {
+    var it = simAll()[i - 1];
+    if (!it) return null;
+    var has = sim.draft.indexOf(it.original) >= 0;
+    if (sim.applied[i] || (!has && sim.draft.indexOf(it.better) >= 0)) return 'Fix ' + i + ' is already in your message.';
+    if (!has) return '"' + it.original + '" isn\'t in your message any more, so fix ' + i + ' can\'t be applied.';
+    sim.draft = sim.draft.replace(it.original, it.better);
+    sim.applied[i] = true;
+    return 'Applied fix ' + i + '. Ctrl+Z in Claude undoes it.';
+  }
+  function simRender(status) {
+    var all = simAll().map(function (it, k) {
+      var st = sim.applied[k + 1] ? 'applied'
+        : sim.draft.indexOf(it.original) >= 0 ? 'can'
+        : sim.draft.indexOf(it.better) >= 0 ? 'fixed' : 'no';
+      return { original: it.original, better: it.better, reason: it.reason, state: st };
+    });
+    var n = sim.def.mistakes.length;
+    render({ view: 'check', mistakes: all.slice(0, n), suggestions: all.slice(n), natural: sim.def.natural, notEnglish: false, canUseFix: true, status: status || undefined });
+  }
+  function startSim(key, fresh) {
+    var def = SIMS[key], status = def.status;
+    sim = { def: def, draft: def.draft, applied: {} };
+    if (!fresh && def.pre) def.pre.forEach(function (i) { status = simDo(i); });
+    simRender(fresh ? null : status);
+  }
+  function demoApply(i) {
+    if (sim) { simRender(simDo(i)); return; }
+    if (!current || current.view !== 'check') return;
+    var n = arr(current.mistakes).length;
+    var all = arr(current.mistakes).concat(arr(current.suggestions)).map(function (it, k) {
+      return k === i - 1 ? Object.assign({}, it, { state: 'applied' }) : it;
+    });
+    render(Object.assign({}, current, { mistakes: all.slice(0, n), suggestions: all.slice(n), status: 'Applied fix ' + i + '. Ctrl+Z in Claude undoes it.' }));
+  }
+
+  var LABELS = [['welcome', 'Welcome'], ['checking', 'Checking'], ['mistakes', '2 to fix'], ['overlap', 'Overlapping fixes'], ['gone', 'Words gone'], ['ideas', 'Ideas only'], ['good', 'Looks good'],
+    ['notenglish', 'Not English'], ['lookup', 'Lookup'], ['nothing', 'Nothing to check'], ['failed', 'Check failed'], ['long', 'Long result'], ['run', '▶ Alt+Enter']];
+  var timers = [];
+  function clearTimers() { timers.forEach(function (t) { clearTimeout(t); clearInterval(t); }); timers = []; }
+
+  function stream(question, answer) {
+    var parts = answer.split(/(\s+)/), i = 0, text = '';
+    render({ view: 'lookup', question: question, answer: '', streaming: true, canUseFix: false });
+    var t = setInterval(function () {
+      text += parts.slice(i, i + 2).join(''); i += 2;
+      if (i >= parts.length) {
+        clearInterval(t);
+        render({ view: 'lookup', question: question, answer: answer, streaming: false, status: 'Answered in 3.9 s', canUseFix: false });
+      } else {
+        render({ view: 'lookup', question: question, answer: text, streaming: true, canUseFix: false });
+      }
+    }, 45);
+    timers.push(t);
+  }
+  function show(key) {
+    clearTimers();
+    sim = null;
+    if (SIMS[key]) startSim(key);
+    else if (key === 'lookup') stream(LOOKUP_Q, LOOKUP_A);
+    else if (key === 'run') {
+      render(DEMO.checking);
+      timers.push(setTimeout(function () { startSim('mistakes', true); }, 2000));
+    } else render(DEMO[key] || DEMO.welcome);
+    if (bar) bar.querySelectorAll('[data-s]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.s === key)); });
+  }
+
+  var theme = params.get('theme'), solid = params.get('solid');
+  if (theme) window.coach.setTheme(theme);
+  if (solid === '1') window.coach.setGlass(false);
+  var bar = null;
+  demoAction = function (msg) {
+    if (logEl) logEl.textContent = 'postMessage ' + JSON.stringify(msg);
+    if (msg.type === 'ask') {
+      clearTimers();
+      sim = null;
+      stream(msg.text, /revert back/i.test(msg.text) ? REVERT_A : LOOKUP_A);
+    } else if (msg.type === 'apply') {
+      demoApply(msg.index);
+    }
+  };
+  var logEl = null;
+
+  if (params.get('bar') !== '0') {
+    document.body.classList.add('demo');
+    bar = $('demobar');
+    bar.hidden = false;
+    var group = function (items, attr, onClick) {
+      var g = h('div', 'grp');
+      items.forEach(function (it) {
+        var b = h('button', null, it[1]);
+        b.type = 'button';
+        b.dataset[attr] = it[0];
+        b.addEventListener('click', function () {
+          onClick(it[0]);
+          if (attr !== 's') g.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+        });
+        g.appendChild(b);
+      });
+      bar.appendChild(g);
+      return g;
+    };
+    group(LABELS, 's', show);
+    var tg = group([['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], 't', window.coach.setTheme);
+    var gg = group([['glass', 'Glass'], ['solid', 'Solid']], 'g', function (v) { window.coach.setGlass(v === 'solid' ? false : 'system'); });
+    var bg = group([['none', 'No backdrop'], ['wall', 'Wallpaper'], ['code', 'Code editor'], ['white', 'White page']], 'b', function (v) {
+      document.body.setAttribute('data-bd', v);
+      document.body.classList.toggle('sim', v !== 'none');
+      $('democode').hidden = v !== 'code';
+    });
+    tg.querySelector('[data-t="' + (theme || 'system') + '"]').setAttribute('aria-pressed', 'true');
+    gg.querySelector('[data-g="' + (solid === '1' ? 'solid' : 'glass') + '"]').setAttribute('aria-pressed', 'true');
+    logEl = h('div', null, 'Demo only. The backdrop blur here stands in for Windows Acrylic. Drag the corner to resize.');
+    logEl.id = 'demolog';
+    bar.appendChild(logEl);
+    bg.querySelector('[data-b="wall"]').click();
+    var code = [
+      'import { spawn } from "node:child_process";', 'import { tmpdir } from "node:os";', '',
+      'export async function runCheck(draft) {', '  const started = performance.now();', '  const prose = maskCode(draft);',
+      '  if (prose.trim().length === 0) {', '    return { view: "message", title: "Nothing to check" };', '  }',
+      '  // One warm process per kind of request', '  const child = await daemon.take("check");',
+      '  const reply = await child.ask({ prose, schema: CHECK_SCHEMA });', '  journal.append({ draft, reply, ms: performance.now() - started });',
+      '  return { view: "check", ...reply };', '}', '', 'export function cleanEnv(env) {', '  const out = { ...env };',
+      '  for (const key of Object.keys(out)) {', '    if (key === "CLAUDECODE" || key.startsWith("CLAUDE_CODE_")) delete out[key];', '  }',
+      '  return out;', '}'];
+    var pre = $('democode');
+    for (var r = 0; r < 3; r++) code.forEach(function (line, n) { pre.textContent += String(r * code.length + n + 1).padStart(4) + '   ' + line + '\n'; });
+  }
+  show(params.get('demo') || 'welcome');
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<style>
+body { margin: 0; background: #e6e6e3; }
+a { color: #005fb8; text-decoration: underline; text-underline-offset: 2px; }
+a:hover { color: #003e7a; }
+</style>
+</helmet>
+<div style="padding: 56px 56px 96px; font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif; color: #1a1a1a; display: flex; flex-direction: column; gap: 56px; width: max-content;">
+  <header style="display: grid; grid-template-columns: 560px 1fr; gap: 48px; align-items: start; max-width: 2336px;">
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: #5a5a5a; font-weight: 600;">English Coach · panel</div>
+      <h1 style="margin: 0; font-size: 34px; line-height: 1.15; font-weight: 600;">Every state, light and dark, over a busy wallpaper and a code editor</h1>
+      <p style="margin: 6px 0 0; font-size: 15px; line-height: 1.5; color: #444; text-wrap: pretty;">Each panel is the delivered HTML file running in a frame at 100% scale, anchored bottom-right as it opens on screen. The blur behind it stands in for Windows 11 Acrylic, which the OS draws in the app. <a href="english-coach-panel.html?demo">Open the interactive demo</a> to switch states, themes and backdrops, and to resize.</p>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; padding-top: 30px; font-size: 13.5px; line-height: 1.5; color: #333;">
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-weight: 600; color: #1a1a1a;">Frosted glass</div>
+        <div style="text-wrap: pretty;">One tint over the whole panel: light #F3F3F3 at 82%, dark #202020 at 84%.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-weight: 600; color: #1a1a1a;">Regions</div>
+        <div style="text-wrap: pretty;">The result area and action row sit on the same glass, marked off by hairlines. Only the Natural version card adds a light veil (white at 45% in light, 5% in dark).</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-weight: 600; color: #1a1a1a;">Worst-case contrast</div>
+        <div style="text-wrap: pretty;">Pure black behind light glass, pure white behind dark. Body text 10.3:1 and 8.8:1, secondary text 4.8:1 and 4.7:1, red, green and amber 4.7:1 or better.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-weight: 600; color: #1a1a1a;">Solid fallback</div>
+        <div style="text-wrap: pretty;">The same colours, opaque, when Windows transparency effects are off. Red is used only for struck-through original words.</div>
+      </div>
+    </div>
+  </header>
+
+  <sc-for list="{{ groups }}" as="group" hint-placeholder-count="1">
+  <div style="display: flex; flex-direction: column; gap: 40px;">
+    <div style="display: flex; align-items: baseline; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,0,0,.14);">
+      <h2 style="margin: 0; font-size: 26px; font-weight: 600;">{{ group.title }}</h2>
+      <span style="font-size: 14px; color: #555;">{{ group.note }}</span>
+    </div>
+  <sc-for list="{{ group.rows }}" as="row" hint-placeholder-count="3">
+    <section style="display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: flex; align-items: baseline; gap: 14px;">
+        <span style="font: 600 13px/1 Consolas, monospace; color: #6a6a6a;">{{ row.n }}</span>
+        <h3 style="margin: 0; font-size: 20px; font-weight: 600;">{{ row.title }}</h3>
+        <span style="font-size: 13.5px; color: #555;">{{ row.note }}</span>
+      </div>
+      <div style="display: flex; gap: 24px;">
+        <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="4">
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="position: relative; width: 560px; height: {{ cell.bh }}px; overflow: hidden; border-radius: 6px; background: #111;">
+              <sc-if value="{{ cell.isWall }}" hint-placeholder-val="{{ true }}">
+                <div style="position: absolute; inset: 0; background: radial-gradient(circle at 20% 22%, #ffd23f 0 60px, transparent 61px), radial-gradient(circle at 86% 16%, #ffffff 0 46px, transparent 47px), radial-gradient(circle at 72% 82%, #0b0b0b 0 120px, transparent 121px), radial-gradient(circle at 28% 78%, #ff4d6d 0 90px, transparent 91px), repeating-linear-gradient(120deg, #fafafa 0 14px, #0d0d0d 14px 28px) 0 52% / 100% 130px no-repeat, conic-gradient(from 200deg at 60% 45%, #3a0ca3, #f72585, #ff9e00, #06d6a0, #118ab2, #3a0ca3);"></div>
+              </sc-if>
+              <sc-if value="{{ cell.isCodeDark }}" hint-placeholder-val="{{ false }}">
+                <div style="position: absolute; inset: 0; display: flex; flex-direction: column; background: #1e1e1e;">
+                  <div style="flex: none; height: 34px; display: flex; align-items: flex-end; padding-left: 44px; background: #252526; font: 12px 'Segoe UI', sans-serif;">
+                    <div style="padding: 9px 16px; background: #1e1e1e; color: #ffffff;">coach.mjs</div>
+                    <div style="padding: 9px 16px; color: #9d9d9d;">daemon.mjs</div>
+                  </div>
+                  <div style="flex: 1; padding-top: 6px; overflow: hidden; font: 12.5px/19px Consolas, 'Cascadia Mono', monospace;">
+                    <sc-for list="{{ cell.lines }}" as="ln" hint-placeholder-count="20">
+                      <div style="display: flex; white-space: pre;"><span style="flex: none; width: 44px; padding-right: 18px; box-sizing: border-box; text-align: right; color: #858585;">{{ ln.n }}</span><sc-for list="{{ ln.toks }}" as="t"><span style="color: {{ t.c }};">{{ t.s }}</span></sc-for></div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-if>
+              <sc-if value="{{ cell.isCodeLight }}" hint-placeholder-val="{{ false }}">
+                <div style="position: absolute; inset: 0; display: flex; flex-direction: column; background: #ffffff;">
+                  <div style="flex: none; height: 34px; display: flex; align-items: flex-end; padding-left: 44px; background: #f3f3f3; font: 12px 'Segoe UI', sans-serif;">
+                    <div style="padding: 9px 16px; background: #ffffff; color: #1f1f1f;">coach.mjs</div>
+                    <div style="padding: 9px 16px; color: #6a6a6a;">daemon.mjs</div>
+                  </div>
+                  <div style="flex: 1; padding-top: 6px; overflow: hidden; font: 12.5px/19px Consolas, 'Cascadia Mono', monospace;">
+                    <sc-for list="{{ cell.lines }}" as="ln" hint-placeholder-count="20">
+                      <div style="display: flex; white-space: pre;"><span style="flex: none; width: 44px; padding-right: 18px; box-sizing: border-box; text-align: right; color: #8a8a8a;">{{ ln.n }}</span><sc-for list="{{ ln.toks }}" as="t"><span style="color: {{ t.c }};">{{ t.s }}</span></sc-for></div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-if>
+              <div style="position: absolute; left: {{ cell.left }}px; top: {{ cell.top }}px; width: {{ cell.w }}px; height: {{ cell.h }}px; border-radius: 8px; backdrop-filter: blur(30px) saturate(1.3); -webkit-backdrop-filter: blur(30px) saturate(1.3); box-shadow: 0 8px 32px rgba(0,0,0,.28), 0 2px 8px rgba(0,0,0,.16);"></div>
+              <iframe src="{{ cell.src }}" title="{{ cell.caption }}" style="position: absolute; left: {{ cell.left }}px; top: {{ cell.top }}px; width: {{ cell.w }}px; height: {{ cell.h }}px; border: 0; background: transparent;"></iframe>
+            </div>
+            <div style="font-size: 13px; color: #555;">{{ cell.caption }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </section>
+  </sc-for>
+  </div>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (!this._groups) this._groups = this.buildRows();
+    return { groups: this._groups };
+  }
+  buildRows() {
+    const code = [
+      'import { spawn } from "node:child_process";',
+      'import { tmpdir } from "node:os";',
+      'import { daemon, journal } from "./daemon.mjs";',
+      '',
+      'const MODEL = "claude-sonnet-5-5";',
+      '',
+      'export async function runCheck(draft) {',
+      '  const started = performance.now();',
+      '  const prose = maskCode(draft);',
+      '  if (prose.trim().length === 0) {',
+      '    return { view: "message", title: "Nothing to check" };',
+      '  }',
+      '  // One warm process per kind of request',
+      '  const child = await daemon.take("check");',
+      '  const reply = await child.ask({ prose, schema: CHECK_SCHEMA });',
+      '  journal.append({ draft, reply, ms: performance.now() - started });',
+      '  return { view: "check", ...reply };',
+      '}',
+      '',
+      'export function cleanEnv(env) {',
+      '  const out = { ...env };',
+      '  for (const key of Object.keys(out)) {',
+      '    if (key === "CLAUDECODE" || key.startsWith("CLAUDE_CODE_")) delete out[key];',
+      '  }',
+      '  return out;',
+      '}',
+      '',
+      'export function maskCode(text) {',
+      '  return text.replace(/```[\\s\\S]*?```/g, " [code] ");',
+      '}'
+    ];
+    const pals = {
+      dark: { text: '#d4d4d4', kw: '#569cd6', str: '#ce9178', comment: '#6a9955', fn: '#dcdcaa', num: '#b5cea8' },
+      light: { text: '#1f1f1f', kw: '#0000ff', str: '#a31515', comment: '#008000', fn: '#795e26', num: '#098658' }
+    };
+    const KW = /^(import|from|export|async|function|const|let|return|if|await|for|of|delete|new)$/;
+    const lines = (pal) => code.map((line, i) => {
+      const toks = [];
+      const re = /(\/\/.*$)|("[^"]*")|([A-Za-z_$][\w$]*)|(\d+)|(\s+)|([^\sA-Za-z_$\d"]+)/g;
+      let m;
+      while ((m = re.exec(line))) {
+        let c = pal.text;
+        if (m[1]) c = pal.comment;
+        else if (m[2]) c = pal.str;
+        else if (m[3]) c = KW.test(m[3]) ? pal.kw : (line[re.lastIndex] === '(' ? pal.fn : pal.text);
+        else if (m[4]) c = pal.num;
+        const last = toks[toks.length - 1];
+        if (last && (last.c === c || m[5])) last.s += m[0]; else toks.push({ s: m[0], c });
+      }
+      return { n: String(i + 1), toks };
+    });
+    const darkLines = lines(pals.dark), lightLines = lines(pals.light);
+    const rows = [
+      ['01', 'welcome', 'Welcome', ''],
+      ['02', 'checking', 'Checking', 'Thin indeterminate bar under the title bar and placeholder lines, for about 2 s. Static with reduced motion.'],
+      ['03', 'mistakes', 'Mistakes found', ''],
+      ['04', 'ideas', 'Optional ideas only', ''],
+      ['05', 'good', 'Looks good', 'Nothing to replace, so the button is disabled.'],
+      ['06', 'notenglish', 'Not English', 'The draft was in Chinese.'],
+      ['07', 'lookup', 'Lookup (streaming)', 'Streams in with a caret, then shows the time taken.'],
+      ['08', 'nothing', 'Nothing to check', ''],
+      ['09', 'failed', 'The check failed', ''],
+      ['10', 'long', 'Long result', '5 mistakes and a 120-word natural version. Only the result area scrolls.'],
+      ['11', 'mistakes', 'Solid fallback', 'Windows transparency effects turned off.', { solid: true }],
+      ['12', 'long', 'Minimum size, 420 × 330', '', { min: true }]
+    ];
+    const cols = [
+      { theme: 'light', bg: 'wall', caption: 'Light · busy wallpaper' },
+      { theme: 'light', bg: 'codeDark', caption: 'Light · dark code editor' },
+      { theme: 'dark', bg: 'wall', caption: 'Dark · busy wallpaper' },
+      { theme: 'dark', bg: 'codeLight', caption: 'Dark · white code editor' }
+    ];
+    const mk = (list, cs) => list.map(([n, key, title, note, opt = {}]) => ({
+      n, title, note,
+      cells: cs.map((c) => {
+        const w = opt.min ? 420 : 480, h = opt.h || (opt.min ? 330 : 490), bh = Math.max(540, h + 50);
+        return {
+          caption: c.caption,
+          isWall: c.bg === 'wall',
+          isCodeDark: c.bg === 'codeDark',
+          isCodeLight: c.bg === 'codeLight',
+          lines: c.bg === 'codeDark' ? darkLines : lightLines,
+          w, h, bh, left: 560 - 24 - w, top: bh - 24 - h,
+          src: `english-coach-panel.html?demo=${key}&theme=${c.theme}&bar=0${opt.solid ? '&solid=1' : ''}`
+        };
+      })
+    }));
+    const applyRows = [
+      ['01', 'mistakes', 'Mistakes found, fix 1 applied', 'Fixes 2 and 3 still show Apply.'],
+      ['02', 'overlap', 'Overlapping fixes', 'Fix 1 changed the words of fix 2, so fix 2 shows Already fixed. Resized to 480 × 660 to show every fix.', { h: 660 }],
+      ['03', 'gone', 'Words gone', 'The user edited "got error" in Claude, so fix 1 shows nothing.']
+    ];
+    return [
+      { title: 'Apply per fix', note: 'Click Apply in any frame to try it. Every fix is recalculated after each apply.', rows: mk(applyRows, [cols[0], cols[2]]) },
+      { title: 'All states', note: '', rows: mk(rows, cols) }
+    ];
+  }
+}
+</script>
+</body>
+</html>

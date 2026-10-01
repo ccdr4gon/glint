@@ -1,0 +1,14 @@
+# Claude Design handoff archive: the same files are unpacked in design/
+*.zip
+
+# Logs (the test window writes tools/glint/test-window.log)
+*.log
+
+# Dependencies and local settings
+node_modules/
+.claude/settings.local.json
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store
