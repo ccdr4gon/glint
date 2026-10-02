@@ -20,6 +20,8 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 Persistent
+#Include glint-clipboard.ahk
+#Include glint-uia.ahk
 
 ; ---------- settings ----------
 SHOW_KEY := "^!e"                ; Ctrl+Alt+E: show or hide this window
@@ -44,6 +46,7 @@ NATURAL_FILE := DATA_DIR "\window\natural.txt"
 
 job := ""                 ; the check or lookup running now, if any
 fixText := ""             ; what Alt+F / "Use fixed version" puts into Claude
+fixHtml := ""             ; the same as HTML, which keeps lists and /command chips (a Buffer, or "")
 claudeHwnd := 0           ; the Claude window the draft came from
 showingCheck := false     ; the window shows a check result (hidden again when you send)
 lastFeedback := ReadText(FEEDBACK_FILE)  ; don't show feedback from before this window started
@@ -161,14 +164,15 @@ Toggle(*) {
 }
 
 ShowWindow() {
-    g.Show()
+    g.Show("Restore")  ; also brings a minimized window back
     ScrollToTop()
     question.Focus()
     PostMessage(0xB1, 0, -1, question)  ; EM_SETSEL: select the old question so typing replaces it
 }
 
+; On screen: a minimized window still counts as "visible" to Windows, but not here.
 IsShown() {
-    return DllCall("IsWindowVisible", "Ptr", g.Hwnd)
+    return DllCall("IsWindowVisible", "Ptr", g.Hwnd) && !DllCall("IsIconic", "Ptr", g.Hwnd)
 }
 
 SetStatus(text) {
@@ -238,18 +242,8 @@ CheckDraft() {
     global claudeHwnd
     claudeHwnd := WinActive(CLAUDE_WINDOW)
     KeyWait("Alt", "L T1")  ; Alt must be up (logically: also covers keys sent by software) before Ctrl+A/C
-    StartJob("check", CopyDraft())
-}
-
-; Copy the message box's text without losing what was on the clipboard.
-CopyDraft() {
-    saved := ClipboardAll()
-    A_Clipboard := ""
-    Send("^a^c")
-    text := ClipWait(1) ? A_Clipboard : ""
-    Send("^{End}")  ; drop the selection and put the cursor back at the end
-    A_Clipboard := saved
-    return text
+    text := ReadDraft(&html)  ; through UI Automation: no copy (glint-uia.ahk)
+    StartJob("check", text, html)
 }
 
 AfterSend() {
@@ -270,7 +264,7 @@ UseFix() {
     }
     if !FocusClaude()
         return
-    PasteIntoClaude(fixText)
+    PasteIntoClaude(fixText, FixedHtml(fixText, fixHtml))
     SetStatus("Fixed version is in Claude. Press Enter to send.")
 }
 
@@ -282,14 +276,16 @@ ApplyFix(n) {
     id := A_TickCount
     inFile := A_Temp "\glint-" id ".draft.txt"
     outFile := A_Temp "\glint-" id ".fixed.txt"
-    FileAppend(CopyDraft(), inFile, "UTF-8-RAW")
-    RunWait(Format('"{1}" "{2}" apply --index {3} --in "{4}" --out "{5}" --theme {6}', NODE, GLINT, n, inFile, outFile, THEME), A_Temp, "Hide")
+    FileAppend(CopyDraft(&html), inFile, "UTF-8-RAW")
+    if (html is Buffer)
+        WriteBuffer(inFile ".html", html)
+    RunWait(Format('"{1}" "{2}" apply --index {3} --in "{4}"{5} --out "{6}" --theme {7}', NODE, GLINT, n, inFile, HtmlArg(inFile ".html"), outFile, THEME), A_Temp, "Hide")
     result := StrSplit(ReadText(outFile ".status"), "`n", "`r")
     if (result.Length >= 1 && result[1] = "ok")
-        PasteIntoClaude(ReadText(outFile))
+        PasteIntoClaude(ReadText(outFile), ReadBuffer(outFile ".cfhtml"))
     SetRtf(ReadText(outFile ".rtf"))
     SetStatus(result.Length >= 2 ? result[2] : "Something went wrong applying that fix.")
-    for path in [inFile, outFile, outFile ".rtf", outFile ".status"] {
+    for path in [inFile, inFile ".html", outFile, outFile ".cfhtml", outFile ".rtf", outFile ".status"] {
         try FileDelete(path)
     }
 }
@@ -314,17 +310,6 @@ FocusClaude() {
     return true
 }
 
-; Replace everything in Claude's message box with `text`, keeping the clipboard as it was.
-PasteIntoClaude(text) {
-    saved := ClipboardAll()
-    A_Clipboard := text
-    if ClipWait(1) {
-        Send("^a^v")
-        Sleep(250)  ; let the paste finish before the clipboard is restored
-    }
-    A_Clipboard := saved
-}
-
 ; A click on an "Apply" link: its hidden target is "fix:N".
 OnLink(ctrl, lParam) {
     if (NumGet(lParam, A_PtrSize * 3, "UInt") != 0x201)  ; act on WM_LBUTTONDOWN only
@@ -347,7 +332,7 @@ OnLink(ctrl, lParam) {
 ; ---------- gate mode: held-back prompts and tips ----------
 
 WatchFeedback() {
-    global lastFeedback, lastTips, fixText, showingCheck
+    global lastFeedback, lastTips, fixText, fixHtml, showingCheck
     tips := ReadText(TIPS_FILE)
     if (tips != "" && tips != lastTips) {
         lastTips := tips
@@ -363,6 +348,7 @@ WatchFeedback() {
     StopJob()
     SetRtf(MessageRtf("Prompt held back", text))
     fixText := Trim(ReadText(NATURAL_FILE))
+    fixHtml := ""  ; gate mode only has the prompt's text
     fixButton.Enabled := (fixText != "")
     SetStatus("Fix it, or press Alt+F. Then send again.")
     showingCheck := true
@@ -378,26 +364,28 @@ Ask(*) {
         StartJob("ask", text)
 }
 
-StartJob(kind, text) {
-    global job, fixText, showingCheck
+StartJob(kind, text, html := "") {
+    global job, fixText, fixHtml, showingCheck
     StopJob()
-    fixText := ""
+    fixText := "", fixHtml := ""
     fixButton.Enabled := false
     showingCheck := (kind = "check")
     id := A_TickCount
     job := {kind: kind, in: A_Temp "\glint-" id ".in.txt", out: A_Temp "\glint-" id ".out.txt", pid: 0, shown: "", started: A_TickCount}
     FileAppend(text, job.in, "UTF-8-RAW")
+    if (html is Buffer)
+        WriteBuffer(job.in ".html", html)
     SetRtf(MessageRtf((kind = "check") ? "Checking your message..." : "Looking it up...", (kind = "ask") ? text : ""))
     SetStatus("")
     if (kind = "check" && !IsShown())
         g.Show("NoActivate")  ; keep the focus in Claude's message box
-    Run(Format('"{1}" "{2}" {3} --in "{4}" --out "{5}" --theme {6}', NODE, GLINT, kind, job.in, job.out, THEME), A_Temp, "Hide", &pid)
+    Run(Format('"{1}" "{2}" {3} --in "{4}"{5} --out "{6}" --theme {7}', NODE, GLINT, kind, job.in, HtmlArg(job.in ".html"), job.out, THEME), A_Temp, "Hide", &pid)
     job.pid := pid
     SetTimer(Poll, 150)
 }
 
 Poll() {
-    global job, fixText
+    global job, fixText, fixHtml
     if !IsObject(job) {
         SetTimer(Poll, 0)
         return
@@ -412,6 +400,7 @@ Poll() {
         seconds := Format("{:.1f}", (A_TickCount - job.started) / 1000)
         if (job.kind = "check") {
             fixText := Trim(ReadText(job.out ".natural"))
+            fixHtml := (fixText != "") ? ReadBuffer(job.out ".naturalhtml") : ""
             fixButton.Enabled := (fixText != "")
             SetStatus(fixText != "" ? "Fix it in Claude, or press Alt+F. Then Enter to send." : "Press Enter in Claude to send.")
         } else {
@@ -435,7 +424,7 @@ StopJob() {
         return
     if (job.pid && ProcessExist(job.pid))
         ProcessClose(job.pid)
-    for path in [job.in, job.out, job.out ".rtf", job.out ".natural", job.out ".done"] {
+    for path in [job.in, job.in ".html", job.out, job.out ".rtf", job.out ".natural", job.out ".naturalhtml", job.out ".done"] {
         try FileDelete(path)
     }
     job := ""

@@ -22,6 +22,8 @@
 #SingleInstance Force
 Persistent
 #Include lib\WebView2\WebView2.ahk
+#Include glint-clipboard.ahk
+#Include glint-uia.ahk
 
 ; ---------- settings ----------
 SHOW_KEY := "^!e"                ; Ctrl+Alt+E: show or hide the panel
@@ -94,10 +96,12 @@ FRAME_JS := "
 
 job := ""                       ; the check or lookup running now, if any
 fixText := ""                   ; what Alt+F / "Use fixed version" puts into Claude
+fixHtml := ""                   ; the same as HTML, which keeps lists and /command chips (a Buffer, or "")
 claudeHwnd := 0                 ; the Claude window the draft came from
 showingCheck := false           ; the panel shows a check result (hidden again when you send)
 lastState := '{"view":"welcome"}'  ; the page's current state, as JSON
 pageReady := false
+pinned := true                  ; always on top (the pin in the title bar)
 SELFTEST := HasArg("--selftest")
 lastFeedback := ReadText(FEEDBACK_FILE)  ; don't show feedback from before the panel started
 lastTips := ReadText(TIPS_FILE)
@@ -105,7 +109,8 @@ lastTips := ReadText(TIPS_FILE)
 CloseOtherWindow("glint-window.ahk")
 
 ; ---------- window ----------
-g := Gui("+AlwaysOnTop -Caption +Resize -MaximizeBox -DPIScale +MinSize" S(420) "x" S(330), "Glint")
+; No minimize box: a click on its taskbar button or Win+M can't minimize it out of sight.
+g := Gui("+AlwaysOnTop -Caption +Resize -MaximizeBox -MinimizeBox -DPIScale +MinSize" S(420) "x" S(330), "Glint")
 g.BackColor := "000000"  ; black under a frame extended over the whole window = see-through to the Acrylic
 OnMessage(0x83, NcCalcSize)  ; WM_NCCALCSIZE
 OnMessage(0x84, NcHitTest)   ; WM_NCHITTEST
@@ -174,7 +179,7 @@ SetFrame() {
     DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", hwnd, "Int", 33, "Int*", 2, "Int", 4)               ; DWMWA_WINDOW_CORNER_PREFERENCE: round
     if GLASS
         DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", hwnd, "Int", 38, "Int*", 3, "Int", 4)           ; DWMWA_SYSTEMBACKDROP_TYPE: Acrylic
-    DllCall("SetWindowPos", "Ptr", hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x27)  ; SWP_FRAMECHANGED | no move/size/z-order
+    DllCall("SetWindowPos", "Ptr", hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x37)  ; SWP_FRAMECHANGED | no move/size/z-order/activation
 }
 
 ; EXTRA_TRANSPARENCY: lowers the opacity of the page's glass tint (82% in the design's light mode,
@@ -264,14 +269,21 @@ ReadText(path) {
     return ""
 }
 
+; On screen: a minimized panel (e.g. by Show desktop) still counts as "visible" to Windows, but not here.
 IsShown() {
-    return DllCall("IsWindowVisible", "Ptr", g.Hwnd)
+    return DllCall("IsWindowVisible", "Ptr", g.Hwnd) && !DllCall("IsIconic", "Ptr", g.Hwnd)
 }
 
 ; Show the panel at its current size. Not with g.Show(): that adds room for a window frame (20 px
 ; each way) every time, not knowing NcCalcSize removed the frame.
 ShowPanel(activate := false) {
-    DllCall("ShowWindow", "Ptr", g.Hwnd, "Int", activate ? 5 : 4)  ; SW_SHOW : SW_SHOWNOACTIVATE
+    if DllCall("IsIconic", "Ptr", g.Hwnd)
+        DllCall("ShowWindow", "Ptr", g.Hwnd, "Int", 4)  ; SW_SHOWNOACTIVATE brings a minimized panel back
+    ; Shown in front of Claude, and on top again if pinned (Show desktop can take it off the top),
+    ; without taking the focus. (Not ShowWindow: its first call in a program started from Explorer
+    ; can activate the window anyway.)
+    DllCall("SetWindowPos", "Ptr", g.Hwnd, "Ptr", pinned ? -1 : 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0
+        , "UInt", 0x53)  ; HWND_TOPMOST or HWND_TOP; SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE
     DllCall("SendMessage", "Ptr", g.Hwnd, "UInt", 0x86, "Ptr", 1, "Ptr", 0)  ; WM_NCACTIVATE: look active, for the Acrylic
     if activate
         WinActivate("ahk_id " g.Hwnd)
@@ -387,7 +399,8 @@ OnPageMessage(sender, args) {
                 SetTimer(StartJob.Bind("ask", text), -1)
             }
         case "pin":
-            WinSetAlwaysOnTop(RegExMatch(json, '"on"\s*:\s*true') ? 1 : 0, "ahk_id " g.Hwnd)
+            global pinned := RegExMatch(json, '"on"\s*:\s*true') ? true : false
+            WinSetAlwaysOnTop(pinned ? 1 : 0, "ahk_id " g.Hwnd)
         case "close":
             g.Hide()
     }
@@ -430,18 +443,8 @@ CheckDraft() {
     global claudeHwnd
     claudeHwnd := WinActive(CLAUDE_WINDOW)
     KeyWait("Alt", "L T1")  ; Alt must be up (logically: also covers keys sent by software) before Ctrl+A/C
-    StartJob("check", CopyDraft())
-}
-
-; Copy the message box's text without losing what was on the clipboard.
-CopyDraft() {
-    saved := ClipboardAll()
-    A_Clipboard := ""
-    Send("^a^c")
-    text := ClipWait(1) ? A_Clipboard : ""
-    Send("^{End}")  ; drop the selection and put the cursor back at the end
-    A_Clipboard := saved
-    return text
+    text := ReadDraft(&html)  ; through UI Automation: no copy (glint-uia.ahk)
+    StartJob("check", text, html)
 }
 
 AfterSend() {
@@ -462,7 +465,7 @@ UseFix() {
     }
     if !FocusClaude()
         return
-    PasteIntoClaude(fixText)
+    PasteIntoClaude(fixText, FixedHtml(fixText, fixHtml))
     SetStatus("Fixed version is in Claude. Press Enter to send.")
 }
 
@@ -474,17 +477,19 @@ ApplyFix(n) {
     id := A_TickCount
     inFile := A_Temp "\glint-" id ".draft.txt"
     outFile := A_Temp "\glint-" id ".fixed.txt"
-    FileAppend(CopyDraft(), inFile, "UTF-8-RAW")
-    RunWait(Format('"{1}" "{2}" apply --index {3} --in "{4}" --out "{5}"', NODE, GLINT, n, inFile, outFile), A_Temp, "Hide")
+    FileAppend(CopyDraft(&html), inFile, "UTF-8-RAW")
+    if (html is Buffer)
+        WriteBuffer(inFile ".html", html)
+    RunWait(Format('"{1}" "{2}" apply --index {3} --in "{4}"{5} --out "{6}"', NODE, GLINT, n, inFile, HtmlArg(inFile ".html"), outFile), A_Temp, "Hide")
     result := StrSplit(ReadText(outFile ".status"), "`n", "`r")
     if (result.Length >= 1 && result[1] = "ok")
-        PasteIntoClaude(ReadText(outFile))
+        PasteIntoClaude(ReadText(outFile), ReadBuffer(outFile ".cfhtml"))
     state := ReadText(outFile ".json")
     if (state != "")
         Render(state)
     else
         SetStatus(result.Length >= 2 ? result[2] : "Something went wrong applying that fix.")
-    for path in [inFile, outFile, outFile ".rtf", outFile ".json", outFile ".status"] {
+    for path in [inFile, inFile ".html", outFile, outFile ".cfhtml", outFile ".rtf", outFile ".json", outFile ".status"] {
         try FileDelete(path)
     }
 }
@@ -509,21 +514,10 @@ FocusClaude() {
     return true
 }
 
-; Replace everything in Claude's message box with `text`, keeping the clipboard as it was.
-PasteIntoClaude(text) {
-    saved := ClipboardAll()
-    A_Clipboard := text
-    if ClipWait(1) {
-        Send("^a^v")
-        Sleep(250)  ; let the paste finish before the clipboard is restored
-    }
-    A_Clipboard := saved
-}
-
 ; ---------- gate mode: held-back prompts and tips ----------
 
 WatchFeedback() {
-    global lastFeedback, lastTips, fixText, showingCheck
+    global lastFeedback, lastTips, fixText, fixHtml, showingCheck
     tips := ReadText(TIPS_FILE)
     if (tips != "" && tips != lastTips) {
         lastTips := tips
@@ -536,6 +530,7 @@ WatchFeedback() {
     lastFeedback := text
     StopJob()
     fixText := Trim(ReadText(NATURAL_FILE))
+    fixHtml := ""  ; gate mode only has the prompt's text
     Render(MessageState("Prompt held back", text), "Fix it, or press Alt+F. Then send again.")
     showingCheck := true
     if !IsShown()
@@ -544,25 +539,27 @@ WatchFeedback() {
 
 ; ---------- running checks and lookups ----------
 
-StartJob(kind, text) {
-    global job, fixText, showingCheck
+StartJob(kind, text, html := "") {
+    global job, fixText, fixHtml, showingCheck
     StopJob()
-    fixText := ""
+    fixText := "", fixHtml := ""
     showingCheck := (kind = "check")
     id := A_TickCount
     job := {kind: kind, in: A_Temp "\glint-" id ".in.txt", out: A_Temp "\glint-" id ".out.txt", pid: 0, shown: "", started: A_TickCount}
     FileAppend(text, job.in, "UTF-8-RAW")
+    if (html is Buffer)
+        WriteBuffer(job.in ".html", html)
     Render(kind = "check" ? '{"view":"checking"}'
         : '{"view":"lookup","question":' JsonString(text) ',"answer":"","streaming":true,"canUseFix":false}')
     if (kind = "check" && !IsShown())
         ShowPanel()  ; keep the focus in Claude's message box
-    Run(Format('"{1}" "{2}" {3} --in "{4}" --out "{5}"', NODE, GLINT, kind, job.in, job.out), A_Temp, "Hide", &pid)
+    Run(Format('"{1}" "{2}" {3} --in "{4}"{5} --out "{6}"', NODE, GLINT, kind, job.in, HtmlArg(job.in ".html"), job.out), A_Temp, "Hide", &pid)
     job.pid := pid
     SetTimer(Poll, 150)
 }
 
 Poll() {
-    global job, fixText
+    global job, fixText, fixHtml
     if !IsObject(job) {
         SetTimer(Poll, 0)
         return
@@ -579,6 +576,7 @@ Poll() {
             Render(MessageState("No answer came back", "Check that Node.js and the Claude CLI work in a terminal."))
         } else if (job.kind = "check") {
             fixText := Trim(ReadText(job.out ".natural"))
+            fixHtml := (fixText != "") ? ReadBuffer(job.out ".naturalhtml") : ""
             Render(job.shown)
         } else {
             Render(job.shown, Format("Answered in {:.1f} s", (A_TickCount - job.started) / 1000))
@@ -601,7 +599,7 @@ StopJob() {
         return
     if (job.pid && ProcessExist(job.pid))
         ProcessClose(job.pid)
-    for path in [job.in, job.out, job.out ".rtf", job.out ".json", job.out ".natural", job.out ".done"] {
+    for path in [job.in, job.in ".html", job.out, job.out ".rtf", job.out ".json", job.out ".natural", job.out ".naturalhtml", job.out ".done"] {
         try FileDelete(path)
     }
     job := ""

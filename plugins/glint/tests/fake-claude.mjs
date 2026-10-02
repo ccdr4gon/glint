@@ -2,12 +2,14 @@
 // Stand-in for `claude -p` in tests. Supports the flags Glint uses.
 //
 // Replies depend on the text it gets:
-//   contains "got error"  -> the check finds a mistake
+//   contains "got error"  -> the check finds a mistake (a draft with a numbered list keeps its
+//                            layout in the natural version, like the real model is told to)
 //   contains "SLOW"       -> waits 3 s before answering
 //   contains "LOGIN"      -> fails like a logged-out CLI
 //   anything else         -> the check passes
 // Without --json-schema it answers in plain text, streamed when --include-partial-messages is set.
-// Set FAKE_CLAUDE_LOG to a file to record each launch (args and the env vars tests care about).
+// Set FAKE_CLAUDE_LOG to a file to record each launch (args and the env vars tests care about), and
+// FAKE_CLAUDE_PROMPTS to a file to record the text of each request.
 
 import fs from 'node:fs';
 import readline from 'node:readline';
@@ -49,13 +51,18 @@ function reply(text) {
     const suggestions = /what to do next/i.test(text)
       ? [{ original: 'what to do next?', better: 'what should I do next?', reason: 'a bit more natural as a direct question' }]
       : [];
-    const natural = mistakes.length || suggestions.length ? 'Why does the API throw an error?' : undefined;
+    const draft = /<prompt>\n?([\s\S]*?)\n?<\/prompt>/.exec(text)?.[1] ?? text;
+    let natural;
+    if (mistakes.length || suggestions.length) {
+      natural = /^\d+\. /m.test(draft) ? draft.replace(/got error/gi, 'throws an error') : 'Why does the API throw an error?';
+    }
     return { structured: { english: true, mistakes, suggestions, natural } };
   }
   return { text: `- "Could you take a look?": polite, for work chat\n(question: ${text.trim().slice(0, 40)})` };
 }
 
 async function respond(text) {
+  if (process.env.FAKE_CLAUDE_PROMPTS) fs.appendFileSync(process.env.FAKE_CLAUDE_PROMPTS, JSON.stringify({ text }) + '\n');
   if (/SLOW/.test(text)) await sleep(3000);
   const r = reply(text);
   const result = r.error

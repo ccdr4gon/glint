@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { applyFix, formatHeld, normalizeCheck, parseFeedback, proseForCheck, shouldCheck, similarity, stripNonProse } from '../scripts/glint.mjs';
+import { cfHtml, commandChips, draftToHtml, editDraftHtml, fragmentFromCfHtml, parseDraftHtml } from '../scripts/richtext.mjs';
 import { checkRtf, rtfEscape } from '../scripts/rtf.mjs';
 
 const TESTS = path.dirname(fileURLToPath(import.meta.url));
@@ -286,7 +287,7 @@ test('hotkey: the window gets rich text for checks and lookups', () => {
 
 test('applyFix: replaces the first match, tolerating case, spacing and quote style', () => {
   assert.deepEqual(applyFix('I have ran the both commands.', 'have ran the both', 'have run both'),
-    { text: 'I have run both commands.', found: true });
+    { text: 'I have run both commands.', found: true, index: 2, length: 17, replacement: 'have run both' }, 'and where, for the HTML edit');
   assert.equal(applyFix('Can help check the logs?', 'can help check', 'can you help me check').text,
     'Can you help me check the logs?', 'keeps the capital at the start of a sentence');
   assert.equal(applyFix('it got   error\nagain', 'got error again', 'fails again').text, 'it fails again', 'any spacing');
@@ -863,4 +864,138 @@ test('config only stores values that differ from the defaults, and reset clears 
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')), { level: 'light' });
   run(['config', 'reset'], { home });
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')), {});
+});
+
+// ---------- Claude's message box as HTML: list numbers and /command chips ----------
+
+// What Claude's message box (TipTap) copies as HTML for a draft with a /goal command chip, a numbered
+// list and an empty line. Its plain-text copy has neither the "1." nor the chip.
+const BOX_HTML = '<p data-pm-slice="0 0 []"><span data-skill-chip="" dir="auto" skillid="goal">/goal</span> refer to the screenshot：</p>'
+  + '<ol><li><p>the build got error on staging</p></li><li><p>left top2 buttons</p></li></ol><p></p><p>next, check the code &amp; logs</p>';
+const BOX_TEXT = '/goal refer to the screenshot：\n1. the build got error on staging\n2. left top2 buttons\n\nnext, check the code & logs';
+
+test('message box HTML: read as text with the list numbers and /command chips', () => {
+  const parsed = parseDraftHtml(BOX_HTML);
+  assert.equal(parsed.text, BOX_TEXT);
+  assert.deepEqual(parsed.chips, [{ text: '/goal', html: '<span data-skill-chip="" dir="auto" skillid="goal">/goal</span>' }]);
+  // bullets, a nested list with a start number, a hard break and a code block
+  const more = parseDraftHtml('<ul><li><p>a</p><ol start="3"><li><p>b</p></li><li><p>c<br>d</p></li></ol></li><li><p>e</p></li></ul><pre><code>x &lt; 1</code></pre>');
+  assert.equal(more.text, '- a\n   3. b\n   4. c\nd\n- e\n```\nx < 1\n```');
+});
+
+test('message box HTML: a fix changes only its words, keeping the list and the chip', () => {
+  const parsed = parseDraftHtml(BOX_HTML);
+  const start = parsed.text.indexOf('got error');
+  assert.equal(editDraftHtml(parsed, start, start + 'got error'.length, 'throws an error'), BOX_HTML.replace('got error', 'throws an error'));
+  // words that run into the chip or a list number can't be changed in place
+  assert.equal(editDraftHtml(parsed, 0, 'goal refer'.length + 1, 'x'), null);
+  const marker = parsed.text.indexOf('1. ');
+  assert.equal(editDraftHtml(parsed, marker, marker + 6, 'x'), null);
+});
+
+test('message box HTML: rebuilt from text with real lists and the same chips', () => {
+  const parsed = parseDraftHtml(BOX_HTML);
+  const html = draftToHtml('/goal Refer to the screenshot:\n1. The build throws an error on staging\n2. The two top-left buttons\n\nNext, check the code & logs.', parsed.chips);
+  assert.equal(html, '<p data-pm-slice="0 0 []"><span data-skill-chip="" dir="auto" skillid="goal">/goal</span> Refer to the screenshot:</p>'
+    + '<ol><li><p>The build throws an error on staging</p></li><li><p>The two top-left buttons</p></li></ol><p></p><p>Next, check the code &amp; logs.</p>');
+  const nested = '- a\n   3. b\n   4. c\n- d';
+  assert.equal(parseDraftHtml(draftToHtml(nested)).text, nested, 'nested lists keep their shape');
+});
+
+test('message box HTML: the clipboard\'s "HTML Format" data and its byte offsets', () => {
+  const data = cfHtml('<p>héllo</p>');
+  const text = data.toString('utf8');
+  const offset = (name) => Number(new RegExp(`${name}:(\\d+)`).exec(text)[1]);
+  assert.equal(data.subarray(offset('StartFragment'), offset('EndFragment')).toString('utf8'), '<p>héllo</p>');
+  assert.equal(offset('EndHTML'), data.length);
+  assert.equal(fragmentFromCfHtml(data), '<p>héllo</p>');
+  assert.equal(fragmentFromCfHtml(Buffer.concat([data, Buffer.from([0, 0])])), '<p>héllo</p>', 'ignores the terminator from the clipboard');
+});
+
+test('fixes never include list numbers or bullets', () => {
+  const r = normalizeCheck({ mistakes: [{ original: '1. the build got error', better: '1. the build throws an error', reason: 'r' }] });
+  assert.deepEqual(r.mistakes.map((m) => [m.original, m.better]), [['the build got error', 'the build throws an error']]);
+});
+
+test('hotkey: a check of the message box HTML sees the list numbers and /goal, and its fixed version keeps them', () => {
+  const home = tempHome();
+  const prompts = path.join(home, 'prompts.log');
+  fs.writeFileSync(path.join(home, 'draft.txt'), 'the plain copy, without numbers');
+  fs.writeFileSync(path.join(home, 'draft.html'), cfHtml(BOX_HTML));
+  const out = path.join(home, 'result.txt');
+  run(['check', '--in', path.join(home, 'draft.txt'), '--html', path.join(home, 'draft.html'), '--out', out], { home, extraEnv: { FAKE_CLAUDE_PROMPTS: prompts } });
+  const sent = JSON.parse(fs.readFileSync(prompts, 'utf8').trim().split('\n').pop()).text;
+  assert.match(sent, /\/goal refer to the screenshot：\n1\. the build got error on staging\n2\. left top2 buttons/);
+  assert.equal(fs.readFileSync(`${out}.natural`, 'utf8'), BOX_TEXT.replace('got error', 'throws an error'));
+  const html = fragmentFromCfHtml(fs.readFileSync(`${out}.naturalhtml`));
+  assert.equal(html, BOX_HTML.replace('got error', 'throws an error').replace('code &amp; logs', 'code &amp; logs'));
+});
+
+test('hotkey: Apply on the message box HTML keeps the list and the /goal chip', () => {
+  const home = tempHome();
+  const result = {
+    mistakes: [
+      { original: 'got error', better: 'throws an error', reason: 'r' },
+      { original: '/goal refer', better: '/goal please refer', reason: 'r' },
+    ],
+    suggestions: [],
+    natural: 'x',
+    notEnglish: false,
+  };
+  fs.mkdirSync(path.join(home, 'window'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'window', 'last-check.json'), JSON.stringify({ id: null, at: Date.now(), draft: BOX_TEXT, result, showNatural: true, applied: [] }));
+  fs.writeFileSync(path.join(home, 'draft.txt'), 'the plain copy, without numbers');
+  fs.writeFileSync(path.join(home, 'draft.html'), cfHtml(BOX_HTML));
+  const apply = (n) => {
+    const out = path.join(home, `applied-${n}.txt`);
+    run(['apply', '--index', String(n), '--in', path.join(home, 'draft.txt'), '--html', path.join(home, 'draft.html'), '--out', out], { home });
+    return {
+      status: fs.readFileSync(`${out}.status`, 'utf8'),
+      text: fs.readFileSync(out, 'utf8'),
+      html: fragmentFromCfHtml(fs.readFileSync(`${out}.cfhtml`)),
+    };
+  };
+  // words inside a list item: changed in place, everything else exactly as it was
+  const one = apply(1);
+  assert.match(one.status, /^ok/);
+  assert.equal(one.text, BOX_TEXT.replace('got error', 'throws an error'));
+  assert.equal(one.html, BOX_HTML.replace('got error', 'throws an error'));
+  // a fix that runs into the chip: the message is rebuilt, still with the chip and the list
+  const two = apply(2);
+  assert.match(two.status, /^ok/);
+  assert.match(two.html, /^<p data-pm-slice="0 0 \[\]"><span data-skill-chip="" dir="auto" skillid="goal">\/goal<\/span> please refer/);
+  assert.match(two.html, /<ol><li><p>the build got error on staging<\/p><\/li><li><p>left top2 buttons<\/p><\/li><\/ol><p><\/p>/);
+});
+
+// ---------- the message box read through UI Automation: plain text, no HTML ----------
+
+test('a /command at the start of a draft read as text becomes a chip again', () => {
+  assert.deepEqual(commandChips('/goal make it better'), [{ text: '/goal', html: '<span data-skill-chip="" dir="auto" skillid="goal">/goal</span>' }]);
+  assert.deepEqual(commandChips('/review'), [{ text: '/review', html: '<span data-skill-chip="" dir="auto" skillid="review">/review</span>' }]);
+  assert.deepEqual(commandChips('/usr/bin is a path'), [], 'a path is not a command');
+  assert.deepEqual(commandChips('please /goal later'), [], 'only at the very start');
+});
+
+test('hotkey: a check of plain text (UI Automation) still gives a fixed version with real lists and the /goal chip', () => {
+  const home = tempHome();
+  // what UI Automation reads from the message box: list numbers written out, the chip as "/goal"
+  const draft = '/goal fix these:\n1. the build got error\n2. left top2 buttons';
+  const { natural } = windowCheck(home, draft);
+  assert.equal(natural, draft.replace('got error', 'throws an error'));
+  const html = fragmentFromCfHtml(fs.readFileSync(path.join(home, 'result.txt.naturalhtml')));
+  assert.equal(html, '<p data-pm-slice="0 0 []"><span data-skill-chip="" dir="auto" skillid="goal">/goal</span> fix these:</p>'
+    + '<ol><li><p>the build throws an error</p></li><li><p>left top2 buttons</p></li></ol>');
+  // a fixed version that dropped the command gets it back
+  const other = tempHome();
+  assert.equal(windowCheck(other, '/goal the build got error').natural, '/goal Why does the API throw an error?');
+});
+
+test('"Use fixed version" with an @mention: the chip comes back from the message box HTML', () => {
+  const home = tempHome();
+  const mention = '<span data-type="at-mention" dir="auto" data-id="file:C:/v/a.mp4" data-label="a.mp4">@a.mp4</span>';
+  fs.writeFileSync(path.join(home, 'box.html'), cfHtml(`<p data-pm-slice="0 0 []">look at ${mention} please</p>`));
+  fs.writeFileSync(path.join(home, 'natural.txt'), 'Please look at @a.mp4.');
+  const out = path.join(home, 'natural.out');
+  run(['natural', '--in', path.join(home, 'natural.txt'), '--html', path.join(home, 'box.html'), '--out', out], { home });
+  assert.equal(fragmentFromCfHtml(fs.readFileSync(`${out}.cfhtml`)), `<p data-pm-slice="0 0 []">Please look at ${mention}.</p>`);
 });

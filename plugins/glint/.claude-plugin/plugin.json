@@ -1,6 +1,6 @@
 {
   "name": "glint",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Glint lints the English in your Claude Code prompts, like a linter for grammar. Press Alt+Enter in the Claude desktop app and the suggestions appear in a small frosted-glass panel, with nothing added to your session. Also: phrase lookups and a journal of your recurring mistakes. (Formerly English Coach.)",
   "author": {
     "name": "ccdr4gon"

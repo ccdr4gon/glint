@@ -78,7 +78,7 @@ Then double-click the `.ahk` file again to restart the panel.
 
 | Key or button | What it does |
 |---|---|
-| **Alt+Enter** in the Claude desktop app | Checks your draft and shows the result. To read it, the panel briefly selects and copies your message, then puts your clipboard back. |
+| **Alt+Enter** in the Claude desktop app | Checks your draft and shows the result. The panel reads your message through Windows UI Automation, the interface screen readers use, so nothing is copied and your clipboard is untouched. |
 | A fix's **Apply** button | Changes just that phrase in your draft. The panel re-reads the draft first, so edits you made after the check are kept. Ctrl+Z in Claude undoes the change. If another, overlapping fix already changed those words, it shows "✓ Already fixed". If the words are gone from your message, nothing changes and the panel says so. |
 | **Alt+F** in Claude or in the panel, or **Use fixed version** | Replaces your whole draft in Claude with the natural version. Press Enter to send. |
 | **Enter** in Claude | Sends as usual, and hides the check result. |
@@ -160,6 +160,7 @@ plugins/glint/
 │   └── coach-instructions.md   instructions Claude gets in inline mode
 ├── scripts/
 │   ├── glint.mjs               hook handlers and the CLI (check, apply, ask, warm, config, journal, daemon)
+│   ├── richtext.mjs            reads and writes the message box's HTML (keeps list numbers and /command chips)
 │   ├── rtf.mjs                 formatted (RTF) results for the fallback window, in light and dark colours
 │   ├── llm.mjs                 runs `claude -p`, through the helper or once directly
 │   └── daemon.mjs              the background helper
@@ -170,6 +171,8 @@ tools/glint/
 ├── panel/glint-panel.html      the panel's page from Claude Design, renamed to Glint
 ├── lib/                        WebView2 bindings from thqby/ahk2_lib (MIT, see lib/SOURCE.md)
 ├── glint-window.ahk            the plain fallback window
+├── glint-clipboard.ahk         copying and pasting the message box, text and HTML (used by both)
+├── glint-uia.ahk               reading the message box through UI Automation, without the clipboard
 └── test-window.ahk             end-to-end test of the fallback window
 design/                         the Claude Design handoff (mockups and the original HTML, from before the rename)
 ```
@@ -178,7 +181,15 @@ design/                         the Claude Design handoff (mockups and the origi
   - It calls `window.glint.render(state)` with the JSON that `glint.mjs check`, `apply` and `ask` write to `<out>.json`.
   - The page sends back `apply`, `useFix`, `ask`, `pin` and `close` messages.
   - When the page loads, the panel adds the resize edges (the window has no frame) and the `EXTRA_TRANSPARENCY` tint. So a new Claude Design export, made from [docs/panel-design-prompt.md](docs/panel-design-prompt.md), can replace the file as it is.
-- **Alt+Enter.** The panel copies your draft, then runs `glint.mjs check`. That sends your prose (pasted text and code replaced by placeholders) to `claude -p --model claude-sonnet-5-5 --effort low` with no tools, MCP servers, hooks or session file, from a temp folder, and asks for JSON matching a schema.
+- **Lists and commands.** Claude's message box copies itself twice. Its plain text leaves out a numbered list's numbers, and pasting plain text back turns a `/command` chip into ordinary words. Its HTML keeps both, so the panel copies that too.
+  - `richtext.mjs` reads the HTML as text with "1. " and "- " written out, so the check sees your list.
+  - **Apply** changes only that fix's words inside the HTML and pastes the HTML back, so lists, `/commands` and @mentions stay exactly as they were.
+  - **Use fixed version** builds HTML from the fixed text, turning numbered lines back into a real list and restoring the chips.
+- **Your clipboard.** Alt+Enter reads the message box through UI Automation (`glint-uia.ahk`). Its text includes the list numbers and `/command` chips, so nothing needs copying.
+  - Apply and Use fixed version change your message, which needs a paste. They copy the box's HTML (Use fixed version only when there's an @mention) and paste, then put your clipboard back.
+  - Everything Glint puts on the clipboard, your own content included, is tagged so Windows clipboard history (Win+V), the cloud clipboard and clipboard managers skip it.
+  - Selecting the words and typing over them would avoid the clipboard entirely, but Chromium places UI Automation selections a character off after each list number, so it isn't safe.
+- **Alt+Enter.** The panel reads your draft, then runs `glint.mjs check`. That sends your prose (pasted text and code replaced by placeholders) to `claude -p --model claude-sonnet-5-5 --effort low` with no tools, MCP servers, hooks or session file, from a temp folder, and asks for JSON matching a schema.
   - The child process drops the host session's `CLAUDECODE` and `CLAUDE_CODE_*` variables, so it uses your own CLI login.
   - In hotkey mode, the UserPromptSubmit hook only records what you then send, so the journal can show whether you fixed the mistakes. It never prints anything.
 - **Background helper.** One Claude process per kind of request is started ahead of time with stream-json input. Each process answers one request and is then replaced, so no conversation builds up.

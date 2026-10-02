@@ -3,7 +3,10 @@
 //
 //   node glint.mjs prompt                 UserPromptSubmit hook
 //   node glint.mjs stop                   Stop hook (inline mode: saves Claude's feedback to the journal)
-//   node glint.mjs check <text>           check a draft's English (--in/--out files: used by the window)
+//   node glint.mjs check <text>           check a draft's English (--in/--out files: used by the window,
+//                                         plus --html: the message box's HTML, which keeps list numbers)
+//   node glint.mjs apply --index N        apply fix N to the draft in --in/--html (the window's Apply)
+//   node glint.mjs natural                the fixed version (--in) as HTML with the chips in --html
 //   node glint.mjs ask <question>         look up an English phrase (--in/--out files: used by the window)
 //   node glint.mjs warm                   start the background helper with a check ready
 //   node glint.mjs config [key value]     show or change settings (also: on, off, hotkey, gate, inline, reset)
@@ -28,6 +31,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HOME, PLUGIN_ROOT, askDaemon, runClaude, startDaemon } from './llm.mjs';
+import { LIST_ITEM_RE, cfHtml, commandChips, draftToHtml, editDraftHtml, fragmentFromCfHtml, parseDraftHtml } from './richtext.mjs';
 import { checkRtf, lookupRtf, messageRtf } from './rtf.mjs';
 
 const PROMPTS_DIR = path.join(PLUGIN_ROOT, 'prompts');
@@ -244,10 +248,14 @@ function parseJsonLoose(text) {
   }
 }
 
+// A fix never includes a list item's number or bullet, so applying it keeps them.
+const unmarked = (text) => text.trim().replace(LIST_ITEM_RE, '');
+
 function cleanItems(list) {
   return (Array.isArray(list) ? list : [])
-    .filter((i) => i && typeof i.original === 'string' && typeof i.better === 'string' && i.original.trim() !== i.better.trim())
-    .map((i) => ({ original: i.original.trim(), better: i.better.trim(), reason: String(i.reason ?? '').trim() }));
+    .filter((i) => i && typeof i.original === 'string' && typeof i.better === 'string')
+    .map((i) => ({ original: unmarked(i.original), better: unmarked(i.better), reason: String(i.reason ?? '').trim() }))
+    .filter((i) => i.original && i.original !== i.better);
 }
 
 // Decides what to do with Sonnet's answer. Unexpected or missing fields count as "nothing to fix",
@@ -308,7 +316,7 @@ export function applyFix(text, original, better) {
     const matched = src.slice(hit.index, hit.index + length);
     let replacement = String(better);
     if (/^[A-Z]/.test(matched) && /^[a-z]/.test(replacement)) replacement = replacement[0].toUpperCase() + replacement.slice(1);
-    return { text: src.slice(0, hit.index) + replacement + src.slice(hit.index + length), found: true };
+    return { text: src.slice(0, hit.index) + replacement + src.slice(hit.index + length), found: true, index: hit.index, length, replacement };
   }
   return { text: src, found: false };
 }
@@ -747,22 +755,53 @@ function cmdJournal(args) {
   }
 }
 
-// `--in file --out file [--theme light|dark]` (the window) or plain words (a terminal).
+// `--in file [--html file] --out file [--theme light|dark]` (the window) or plain words (a terminal).
 function parseFileArgs(args) {
   const opts = { rest: [], theme: 'light' };
   for (let i = 0; i < args.length; i++) {
-    if (['--in', '--out', '--theme'].includes(args[i])) opts[args[i].slice(2)] = args[++i];
+    if (['--in', '--html', '--out', '--theme'].includes(args[i])) opts[args[i].slice(2)] = args[++i];
     else opts.rest.push(args[i]);
   }
   return opts;
 }
 
+// The draft from the window. Claude's message box copies itself as plain text (--in), which leaves
+// out list numbers, and as HTML (--html, its "HTML Format" clipboard data), which keeps them and its
+// /command and @mention chips. Read from the HTML when there is some: `rich` is then what
+// editDraftHtml and draftToHtml need to paste a fix back with lists and chips intact.
+function readDraft(opts, words = '') {
+  const plain = opts.in ? fs.readFileSync(opts.in, 'utf8') : words;
+  let rich = null;
+  if (opts.html) {
+    try {
+      rich = parseDraftHtml(fragmentFromCfHtml(fs.readFileSync(opts.html)));
+    } catch {
+      rich = null;
+    }
+  }
+  if (!rich?.text.trim()) rich = null;
+  return { text: rich ? rich.text : plain, rich };
+}
+
+// A message that starts with a /command still starts with it in the fixed version.
+function keepLeadingCommand(draft, natural) {
+  const first = draft.rich?.pieces[0];
+  const command = draft.rich ? (first?.kind === 'atom' ? first.text : '') : commandChips(draft.text)[0]?.text;
+  if (!natural || !command?.startsWith('/') || natural.startsWith(command)) return natural;
+  return `${command} ${natural}`;
+}
+
+// The chips to put back when pasting text into the message box: from its HTML when the window
+// copied it, else the /command a draft read as text starts with.
+const chipsFor = (draft) => (draft.rich ? draft.rich.chips : commandChips(draft.text));
+
 // Check a draft without sending anything (Alt+Enter in the window). With --out, writes the message to
-// <out>, rich text for the window to <out>.rtf, the natural version to <out>.natural, then an empty
-// <out>.done.
+// <out>, rich text for the window to <out>.rtf, the natural version to <out>.natural (and, with
+// --html, as HTML to paste to <out>.naturalhtml), then an empty <out>.done.
 async function cmdCheck(args) {
   const opts = parseFileArgs(args);
-  const text = (opts.in ? fs.readFileSync(opts.in, 'utf8') : opts.rest.join(' ')).trim();
+  const draft = readDraft(opts, opts.rest.join(' '));
+  const text = draft.text.trim();
   const cfg = loadConfig();
   const { theme } = opts;
   let message;
@@ -782,6 +821,7 @@ async function cmdCheck(args) {
       const answer = await runClaude(checkSpec(cfg), `<prompt>\n${proseForCheck(text)}\n</prompt>`, { timeoutMs: CHECK_TIMEOUT_MS });
       if (answer.isError) throw new Error(answer.text);
       const result = normalizeCheck(answer.structured ?? parseJsonLoose(answer.text), cfg.level);
+      result.natural = keepLeadingCommand(draft, result.natural);
       const words = proseWordCount(text);
       message = formatCheck(result, cfg, { words });
       const showNatural = cfg.rewrite !== 'never' && (cfg.rewrite === 'always' || words <= 120);
@@ -820,12 +860,24 @@ async function cmdCheck(args) {
   fs.writeFileSync(`${opts.out}.rtf`, rtf);
   fs.writeFileSync(`${opts.out}.json`, JSON.stringify(panel));
   fs.writeFileSync(`${opts.out}.natural`, natural);
+  if (natural) fs.writeFileSync(`${opts.out}.naturalhtml`, cfHtml(draftToHtml(natural, chipsFor(draft))));
   fs.writeFileSync(`${opts.out}.done`, '');
 }
 
-// Apply fix number N (its Apply link or button) from the last check to the draft in --in.
-// Writes the new draft to <out> (only if it worked), the updated view to <out>.rtf (old window)
-// and <out>.json (panel), and "ok" or "fail" plus a message for the status line to <out>.status.
+// "Use fixed version" when the fixed text has @mentions: those chips can only come from the message
+// box's own HTML (--html, copied just now), so rebuild the fixed text (--in) with them.
+// Writes the HTML to paste to <out>.cfhtml.
+function cmdNatural(args) {
+  const opts = parseFileArgs(args);
+  const natural = fs.readFileSync(opts.in, 'utf8');
+  const { rich } = readDraft({ html: opts.html });
+  fs.writeFileSync(`${opts.out}.cfhtml`, cfHtml(draftToHtml(natural, rich ? rich.chips : commandChips(natural))));
+}
+
+// Apply fix number N (its Apply link or button) from the last check to the draft in --in (and
+// --html). Writes the new draft to <out> and, with --html, as HTML to paste to <out>.cfhtml (only if
+// it worked), the updated view to <out>.rtf (old window) and <out>.json (panel), and "ok" or "fail"
+// plus a message for the status line to <out>.status.
 function cmdApply(args) {
   const opts = parseFileArgs(args);
   const index = Number(opts.rest[opts.rest.indexOf('--index') + 1] ?? opts.rest[0]);
@@ -847,19 +899,26 @@ function cmdApply(args) {
   const items = allItems(last.result);
   const item = items[index - 1];
   if (!item) return respond(false, `There's no fix number ${index}.`, last.draft);
-  const draft = opts.in ? fs.readFileSync(opts.in, 'utf8') : '';
+  const { text: draft, rich } = readDraft(opts);
   if (!draft.trim()) return respond(false, "Couldn't read your message in Claude. Click into its message box and try again.", last.draft);
 
-  const { text, found } = applyFix(draft, currentOriginal(items, index - 1, last.applied ?? []), item.better);
-  if (!found) {
+  const fix = applyFix(draft, currentOriginal(items, index - 1, last.applied ?? []), item.better);
+  if (!fix.found) {
     return respond(false, contains(draft, item.better)
       ? `Fix ${index} is already in your message.`
       : `"${item.original}" isn't in your message any more, so fix ${index} can't be applied.`, draft);
   }
+  const { text } = fix;
   last.applied = [...new Set([...(last.applied ?? []), index])];
   last.draft = text;
   fs.writeFileSync(LAST_CHECK_FILE, JSON.stringify(last));
   fs.writeFileSync(opts.out, text);
+  if (rich) {
+    // Change just those words in the message box's own HTML; if they cross a list marker, a line
+    // break or a chip, rebuild the message from the new text instead.
+    const html = editDraftHtml(rich, fix.index, fix.index + fix.length, fix.replacement) ?? draftToHtml(text, rich.chips);
+    fs.writeFileSync(`${opts.out}.cfhtml`, cfHtml(html));
+  }
   respond(true, `Applied fix ${index}. Ctrl+Z in Claude undoes it.`, text);
 }
 
@@ -990,6 +1049,7 @@ async function main() {
     if (cmd === 'ask') return await cmdAsk(args);
     if (cmd === 'check') return await cmdCheck(args);
     if (cmd === 'apply') return cmdApply(args);
+    if (cmd === 'natural') return cmdNatural(args);
     if (cmd === 'warm') return await cmdWarm();
     if (cmd === 'daemon') return await cmdDaemon(args);
     console.log('Usage: glint.mjs <prompt|stop|check|ask|warm|config|journal|daemon> [args]');
