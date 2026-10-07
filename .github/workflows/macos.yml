@@ -1,0 +1,49 @@
+name: macOS panel
+
+on:
+  push:
+    paths:
+      - 'tools/glint/**'
+      - 'plugins/glint/**'
+      - '.github/workflows/macos.yml'
+  pull_request:
+    paths:
+      - 'tools/glint/**'
+      - 'plugins/glint/**'
+      - '.github/workflows/macos.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Plugin tests
+        run: node --test plugins/glint/tests/glint.test.mjs
+      - name: Build Glint.app
+        run: bash tools/glint/mac/build.sh
+      # The page's messages through WebKit, with the fake claude and a --target that isn't running,
+      # so nothing needs Accessibility permission.
+      - name: Self-test the panel
+        env:
+          GLINT_CLAUDE: ${{ github.workspace }}/plugins/glint/tests/fake-claude.mjs
+          GLINT_NO_DAEMON: '1'
+        run: |
+          export GLINT_HOME="$RUNNER_TEMP/glint-home"
+          mkdir -p "$GLINT_HOME"
+          tools/glint/mac/build/Glint.app/Contents/MacOS/Glint --selftest --target com.example.no-such-app &
+          pid=$!
+          for i in $(seq 1 60); do
+            grep -q "selftest: done" "$GLINT_HOME/panel.log" 2>/dev/null && break
+            sleep 1
+          done
+          kill "$pid" || true
+          cat "$GLINT_HOME/panel.log"
+          grep -q 'selftest: after pin off, on top = 0' "$GLINT_HOME/panel.log"
+          grep -q 'selftest: after ask, state = {"view":"lookup"' "$GLINT_HOME/panel.log"
+          grep -q 'status: Open Claude first.' "$GLINT_HOME/panel.log"
+          grep -q 'selftest: after close, visible = false' "$GLINT_HOME/panel.log"

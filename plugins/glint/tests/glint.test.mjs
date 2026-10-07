@@ -27,6 +27,7 @@ function env(home, extra = {}) {
     GLINT_HOME: home,
     GLINT_CLAUDE: FAKE_CLAUDE,
     GLINT_NO_DAEMON: '1',
+    GLINT_KEYS: 'windows', // the same key names on every platform
     FAKE_CLAUDE_LOG: path.join(home, 'fake-claude.log'),
     ...extra,
   };
@@ -454,6 +455,20 @@ test('panel: check, apply and ask write the state that window.glint.render() tak
 test('hotkey: check works from the terminal too', () => {
   const home = tempHome();
   assert.match(run(['check', 'the', 'build', 'got', 'error'], { home }).out, /• "got error" → "throws an error"/);
+});
+
+test('hotkey: the Mac panel gets Mac key names', () => {
+  const home = tempHome();
+  const mac = { GLINT_KEYS: 'mac' };
+  fs.writeFileSync(path.join(home, 'blank.txt'), '');
+  run(['check', '--in', path.join(home, 'blank.txt'), '--out', path.join(home, 'empty.txt')], { home, extraEnv: mac });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'empty.txt.json'), 'utf8')).body, 'Type your message in Claude first, then press ⌘Enter.');
+
+  fs.writeFileSync(path.join(home, 'draft.txt'), 'the build got error, what to do next?');
+  run(['check', '--in', path.join(home, 'draft.txt'), '--out', path.join(home, 'result.txt')], { home, extraEnv: mac });
+  const out = path.join(home, 'applied.txt');
+  run(['apply', '--index', '1', '--in', path.join(home, 'draft.txt'), '--out', out], { home, extraEnv: mac });
+  assert.equal(JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')).status, 'Applied fix 1. ⌘Z in Claude undoes it.');
 });
 
 test('warm: starts the helper with a check ready', async () => {

@@ -1,8 +1,8 @@
 # Glint for Claude Code
 
-Glint is grammar lint for your prompts: a Claude Code plugin for developers who are improving their written English. In the Claude desktop app, press **Alt+Enter** to check your draft before you send it. The suggestions appear in a small frosted-glass panel next to Claude, and nothing is added to your session. Enter and Shift+Enter work exactly as before.
+Glint is grammar lint for your prompts: a Claude Code plugin for developers who are improving their written English. In the Claude desktop app, press **Alt+Enter** on Windows or **⌘Enter** on a Mac to check your draft before you send it. The suggestions appear in a small frosted-glass panel next to Claude, and nothing is added to your session. Enter and Shift+Enter work exactly as before.
 
-The same panel lets you look up English phrases at any time (Ctrl+Alt+E). Every check is saved to a journal, so you can review your recurring mistakes.
+The same panel lets you look up English phrases at any time (Ctrl+Alt+E on Windows, ⌃⌥E on a Mac). Every check is saved to a journal, so you can review your recurring mistakes.
 
 <img src="docs/panel.png" alt="The Glint panel: three things to fix, with Applied, Already fixed and Apply states, an optional idea, and the Use fixed version button" width="420">
 
@@ -12,8 +12,8 @@ The same panel lets you look up English phrases at any time (Ctrl+Alt+E). Every 
 type your message in Claude
    │
    ├─ Alt+Enter ─► your draft is checked (about 2 s) ─► suggestions appear in the Glint panel
-   │                                                   (the cursor stays in Claude's message box)
-   │     edit your message yourself, click a fix's Apply, or use the whole fixed version (Alt+F)
+   │  (⌘Enter on a Mac)                                (the cursor stays in Claude's message box)
+   │     edit your message yourself, click a fix's Apply, or use the whole fixed version (Alt+F, ⌥F on a Mac)
    │
    └─ Enter ─────► sent as usual. Any check result in the panel hides.
 ```
@@ -28,13 +28,16 @@ You can switch modes with `/glint:config <mode>`:
 
 | Mode | What happens |
 |---|---|
-| `hotkey` (default) | Check only when you press Alt+Enter. Nothing appears in the session. |
+| `hotkey` (default) | Check only when you press Alt+Enter (⌘Enter on a Mac). Nothing appears in the session. |
 | `gate` | Every prompt is checked when you press Enter. A prompt with mistakes is held back and the desktop app shows "Prompt blocked by a hook". Send it again, edited or as-is, and it goes through. Start a prompt with `*` to skip the check. |
 | `inline` | The prompt goes straight to Claude, which adds the English feedback to the top of its reply. |
 
 ## Install
 
-Requires Node.js 18 or later, [AutoHotkey v2](https://www.autohotkey.com/) for the panel, and the Claude CLI logged in to your account (`claude` in a terminal, then `/login`). Checks run through your own CLI login. The panel also uses the Microsoft Edge WebView2 runtime, which comes with Windows 11.
+Requires Node.js 18 or later and the Claude CLI logged in to your account (`claude` in a terminal, then `/login`). Checks run through your own CLI login. The panel needs:
+
+- **Windows:** [AutoHotkey v2](https://www.autohotkey.com/) and the Microsoft Edge WebView2 runtime, which comes with Windows 11.
+- **macOS:** macOS 12 or later and the Xcode command line tools (`xcode-select --install`), to build the panel.
 
 1. Get the code. The panel runs from this folder:
 
@@ -54,7 +57,21 @@ Requires Node.js 18 or later, [AutoHotkey v2](https://www.autohotkey.com/) for t
 
    To install from your clone instead, so your local changes are used, pass its path to `claude plugin marketplace add`.
 
-3. Start the panel: double-click `tools/glint/glint-panel.ahk`. To start it with Windows, put a shortcut to it in the folder that opens with Win+R → `shell:startup`, and add `--hidden` to the shortcut's target so it starts in the background.
+3. Start the panel.
+
+   **Windows:** double-click `tools/glint/glint-panel.ahk`. To start it with Windows, put a shortcut to it in the folder that opens with Win+R → `shell:startup`, and add `--hidden` to the shortcut's target so it starts in the background.
+
+   **macOS:** build the app, then open it:
+
+   ```bash
+   bash tools/glint/mac/build.sh
+   ```
+
+   ```bash
+   open tools/glint/mac/build/Glint.app
+   ```
+
+   macOS asks for Accessibility permission the first time. Turn on Glint in System Settings → Privacy & Security → Accessibility, and the panel starts working straight away. To start it when you log in, click Glint's icon in the menu bar and choose **Open at Login** (macOS 13 or later).
 
 4. Start a new Claude Code session.
 
@@ -70,7 +87,7 @@ claude plugin marketplace update prompt-optimizer
 claude plugin update glint@prompt-optimizer
 ```
 
-Then double-click the `.ahk` file again to restart the panel.
+Then restart the panel: double-click the `.ahk` file again on Windows. On a Mac, run `bash tools/glint/mac/build.sh` again and open the app.
 
 ## The Glint panel
 
@@ -104,6 +121,33 @@ Alt+Enter only works in the Claude desktop app. In a terminal, use `/glint:check
 
 **Plain fallback:** `glint-window.ahk` does the same job with standard Windows controls and no WebView2. Starting either one closes the other, so only one listens for Alt+Enter.
 
+## The Glint panel on macOS
+
+`tools/glint/mac/build/Glint.app` shows the same panel page in a window with macOS's own frosted glass behind it. It lives in the menu bar, not the Dock. Drag the title bar to move it, drag an edge to resize it, and use the pin and × as on Windows.
+
+| Key or button | What it does |
+|---|---|
+| **⌘Enter** in the Claude desktop app | Checks your draft and shows the result, with the cursor still in Claude's message box. Claude doesn't see the key. |
+| A fix's **Apply** button | Changes just that phrase in your draft. ⌘Z in Claude undoes it. |
+| **⌥F** in Claude or in the panel, or **Use fixed version** | Replaces your whole draft in Claude with the natural version. Press Enter to send. |
+| **Enter** in Claude | Sends as usual, and hides the check result. |
+| **⌃⌥E** anywhere | Shows or hides the panel, ready to type in the ask box. |
+| **Esc** | Hides the panel. |
+
+⌘Enter only takes over that key while Claude is the app in front, and ⌥F only while there's a fixed version to use. At other times both reach your apps as usual. If you've set Claude to send messages with ⌘Enter, Glint's ⌘Enter replaces that, so send with Enter.
+
+- **Accessibility permission.** Glint watches for ⌘Enter, Enter and ⌥F while Claude is in front, and presses ⌘A, ⌘C and ⌘V in Claude to read and change your message. Both need Accessibility permission. Glint only acts on those keys and passes everything else on untouched. ⌃⌥E is a standard system hotkey and needs no permission.
+- **Your clipboard.** On a Mac, Glint reads your message by copying it (⌘A, ⌘C), because the copy's HTML keeps list numbers and `/command` chips. It then puts your clipboard back, so a check leaves it as it was. Apply and Use fixed version paste the same way. Everything Glint puts on the clipboard, your own content included, is marked with the [nspasteboard.org](http://nspasteboard.org) markers that clipboard managers such as Maccy, Paste and Raycast use to skip it.
+- **Keyboard layouts.** Glint presses ⌘A, ⌘C and ⌘V by the letters they type in your keyboard layout, so they're right on AZERTY, Dvorak and "Dvorak - QWERTY ⌘" too.
+- **After a rebuild.** `build.sh` signs the app ad hoc, so macOS treats each build as a new app. If ⌘Enter stops working after a rebuild, turn Glint off and on again in Accessibility, or remove it from the list and open the app again. To avoid this, sign with your own certificate: set `GLINT_SIGN_IDENTITY` to its name when you run `build.sh`.
+- **Where it runs from.** The app runs the panel page and the plugin's scripts from the clone you built it in, so keep the clone where it is. The app itself can move, for example to `/Applications`. It runs `node` with your login shell's `PATH`, so Homebrew's and nvm's Node.js are found.
+
+The panel follows your macOS light or dark mode, and turns solid when Reduce transparency is on (System Settings → Accessibility → Display). Start options, for example `open tools/glint/mac/build/Glint.app --args --hidden`:
+- `--hidden` starts it in the background; ⌃⌥E shows it.
+- `--theme dark` or `--theme light` forces a theme.
+
+You can change `HIDE_AFTER_SEND`, `KEEP_WARM`, `SHOW_KEY` and `EXTRA_TRANSPARENCY` at the top of `tools/glint/mac/GlintPanel.swift`. They work as on Windows. Run `build.sh` again afterwards.
+
 ## Skills
 
 | Command | What it does |
@@ -131,7 +175,7 @@ Alt+Enter only works in the Claude desktop app. In a terminal, use `/glint:check
 
 - **Check time:** about 2 s when a Claude process is already warm (`KEEP_WARM`), and 4–7 s from a cold start.
 - **Background helper:** checks go through a small background helper. It starts automatically, keeps one Claude process ready for each kind of request, and exits after 30 minutes without use. Run `node plugins/glint/scripts/glint.mjs daemon status` (or `stop`) to inspect it.
-- **Cost:** each check or lookup is a small Sonnet call on your Claude plan, about $0.004–0.01 each at API prices. Hotkey mode only calls Claude when you press Alt+Enter.
+- **Cost:** each check or lookup is a small Sonnet call on your Claude plan, about $0.004–0.01 each at API prices. Hotkey mode only calls Claude when you press Alt+Enter (⌘Enter on a Mac).
 
 ## Your data
 
@@ -143,7 +187,7 @@ Everything stays on your machine in `~/.claude/glint/`. To use a different folde
 | `journal.jsonl` | Each check with its mistakes and optional ideas, what you sent after a check, and your phrase lookups. Delete it to start fresh. |
 | `window/` | The latest check, for linking it to what you send, plus gate-mode feedback for the panel |
 | `held/`, `pending/` | Short-lived gate and inline mode state |
-| `webview2/` | The panel's WebView2 data, such as its cache |
+| `webview2/` | The Windows panel's WebView2 data, such as its cache |
 | `daemon.log`, `panel.log` | Logs from the helper and the panel, each capped at a few hundred KB |
 
 This folder is deliberately outside the plugin, so your journal survives updates and reinstalls.
@@ -173,8 +217,12 @@ tools/glint/
 ├── glint-window.ahk            the plain fallback window
 ├── glint-clipboard.ahk         copying and pasting the message box, text and HTML (used by both)
 ├── glint-uia.ahk               reading the message box through UI Automation, without the clipboard
-└── test-window.ahk             end-to-end test of the fallback window
+├── test-window.ahk             end-to-end test of the fallback window
+└── mac/
+    ├── GlintPanel.swift        the macOS panel (AppKit + WKWebView over macOS's frosted glass)
+    └── build.sh                builds it into mac/build/Glint.app
 design/                         the Claude Design handoff (mockups and the original HTML, from before the rename)
+.github/workflows/macos.yml     builds and self-tests the macOS panel, and runs the tests on macOS
 ```
 
 - **The panel.** `glint-panel.ahk` shows `panel/glint-panel.html` (Claude Design's page with only the name changed) and drives it through its own interface:
@@ -194,6 +242,10 @@ design/                         the Claude Design handoff (mockups and the origi
   - In hotkey mode, the UserPromptSubmit hook only records what you then send, so the journal can show whether you fixed the mistakes. It never prints anything.
 - **Background helper.** One Claude process per kind of request is started ahead of time with stream-json input. Each process answers one request and is then replaced, so no conversation builds up.
 - **Gate mode.** The hook blocks with `decision: "block"` and also exits with code 2, then lets the next prompt through. Any error lets the prompt through.
+- **The macOS panel.** `GlintPanel.swift` drives the same page and the same `glint.mjs` commands as the Windows panel:
+  - A small script added at page start turns the page's `window.chrome.webview.postMessage` into WebKit's message handler, so the page needs no changes. Another, added when the page has loaded, sets the Mac font and shows Mac key names (⌘Enter for Alt+Enter, ⌥F for Alt+F) with the same keycaps.
+  - ⌘Enter, Enter and ⌥F are seen by a Quartz event tap on its own thread, so the keys Glint presses in Claude get through while the panel waits for them. ⌃⌥E is a Carbon system hotkey.
+  - `glint.mjs` says ⌘Enter and ⌘Z in its messages on a Mac. `GLINT_KEYS=windows` or `GLINT_KEYS=mac` picks the names.
 
 Design notes from other projects:
 - [severity1/claude-code-prompt-improver](https://github.com/severity1/claude-code-prompt-improver): the `*` bypass, skipping harness events, never failing closed.
@@ -228,6 +280,18 @@ Test the fallback window end to end. This opens a stand-in "Fake Claude" window,
 ```bash
 "C:/Program Files/AutoHotkey/v2/AutoHotkey64.exe" tools/glint/test-window.ahk
 ```
+
+Test the macOS panel's messages the same way. Build it, then run the app directly with `--selftest` and a `--target` bundle ID that isn't running, so nothing reaches Claude. It logs what it did to `panel.log`, and needs no Accessibility permission:
+
+```bash
+bash tools/glint/mac/build.sh
+```
+
+```bash
+GLINT_HOME="$(mktemp -d)" GLINT_CLAUDE="$PWD/plugins/glint/tests/fake-claude.mjs" tools/glint/mac/build/Glint.app/Contents/MacOS/Glint --selftest --target com.example.none
+```
+
+The `macOS panel` GitHub workflow does this on every push that changes the panel or the plugin.
 
 Check a draft from a terminal:
 

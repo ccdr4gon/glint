@@ -14,8 +14,8 @@
 //   node glint.mjs daemon [status|stop]   the background helper (started automatically)
 //
 // Three modes:
-//   hotkey (default)  Nothing happens in the session. Press Alt+Enter in the Claude desktop app to
-//                     check your draft; the Glint window shows the suggestions.
+//   hotkey (default)  Nothing happens in the session. Press Alt+Enter (⌘Enter on a Mac) in the Claude
+//                     desktop app to check your draft; the Glint window shows the suggestions.
 //   gate              Before Claude sees a prompt, Sonnet checks its English. If it finds mistakes, the
 //                     prompt is held back and you get corrections. Send again (edited or as-is) and it
 //                     goes straight through. Start a prompt with * to skip the check.
@@ -110,6 +110,12 @@ const CHECK_SCHEMA = {
 
 // Harness-generated "prompts" (background task results, slash command echoes, etc.), not user writing.
 const MACHINE_EVENT_RE = /^<(task-notification|command-(name|message|args)|local-command-(stdout|stderr|caveat)|system-reminder|bash-(input|stdout|stderr)|ci-monitor-event|agent-message|user-prompt-submit-hook)\b/;
+
+// Key names in messages: the Windows panel's, or the Mac panel's (tools/glint/mac). GLINT_KEYS
+// (windows | mac) overrides the platform's.
+export const KEYS = (process.env.GLINT_KEYS || (process.platform === 'darwin' ? 'mac' : 'windows')) === 'mac'
+  ? { check: '⌘Enter', undo: '⌘Z', paste: '⌘V' }
+  : { check: 'Alt+Enter', undo: 'Ctrl+Z', paste: 'Ctrl+V' };
 
 // Matches the block header Claude writes in inline mode, tolerating small formatting drift.
 const HEADER_RE = /📝\s*\**\s*English check/i;
@@ -279,8 +285,7 @@ export function formatHeld(result, cfg, { copied = false, words = 0 } = {}) {
   const showNatural = result.natural && cfg.rewrite !== 'never'
     && (cfg.rewrite === 'always' || words <= 120 || result.notEnglish);
   if (showNatural) lines.push(`✏️ ${result.notEnglish ? 'In English' : 'Natural version'}: ${result.natural}`);
-  const paste = process.platform === 'darwin' ? 'Cmd+V' : 'Ctrl+V';
-  lines.push(`↩ Send it again, edited or as-is, and it goes straight through.${copied ? ` Your prompt is on the clipboard (${paste}).` : ''} Start a prompt with * to skip the check.`);
+  lines.push(`↩ Send it again, edited or as-is, and it goes straight through.${copied ? ` Your prompt is on the clipboard (${KEYS.paste}).` : ''} Start a prompt with * to skip the check.`);
   return lines.join('\n');
 }
 
@@ -369,7 +374,8 @@ export function panelCheck(result, states, { showNatural = true, status } = {}) 
 
 const panelMessage = (title, body) => ({ view: 'message', title, body });
 
-// Hotkey mode: what the window shows after Alt+Enter. Nothing is held back; the user decides.
+// Hotkey mode: what the window shows after Alt+Enter (⌘Enter on a Mac). Nothing is held back; the
+// user decides.
 export function formatCheck(result, cfg, { words = 0 } = {}) {
   if (!result.hold && !result.suggestions.length) return '📝 English check: ✅ Looks good. Press Enter to send.';
   const lines = [result.hold ? '📝 English check' : '📝 English check: ✅ No mistakes. Optional ideas:'];
@@ -795,9 +801,9 @@ function keepLeadingCommand(draft, natural) {
 // copied it, else the /command a draft read as text starts with.
 const chipsFor = (draft) => (draft.rich ? draft.rich.chips : commandChips(draft.text));
 
-// Check a draft without sending anything (Alt+Enter in the window). With --out, writes the message to
-// <out>, rich text for the window to <out>.rtf, the natural version to <out>.natural (and, with
-// --html, as HTML to paste to <out>.naturalhtml), then an empty <out>.done.
+// Check a draft without sending anything (Alt+Enter, or ⌘Enter on a Mac). With --out, writes the
+// message to <out>, rich text for the window to <out>.rtf, the natural version to <out>.natural
+// (and, with --html, as HTML to paste to <out>.naturalhtml), then an empty <out>.done.
 async function cmdCheck(args) {
   const opts = parseFileArgs(args);
   const draft = readDraft(opts, opts.rest.join(' '));
@@ -809,13 +815,13 @@ async function cmdCheck(args) {
   let natural = '';
   let panel;
   if (!text) {
-    message = 'Nothing to check. Type your message in Claude first, then press Alt+Enter.';
-    rtf = messageRtf('Nothing to check', 'Type your message in Claude first, then press Alt+Enter.', { theme });
-    panel = panelMessage('Nothing to check', 'Type your message in Claude first, then press Alt+Enter.');
+    message = `Nothing to check. Type your message in Claude first, then press ${KEYS.check}.`;
+    rtf = messageRtf('Nothing to check', `Type your message in Claude first, then press ${KEYS.check}.`, { theme });
+    panel = panelMessage('Nothing to check', `Type your message in Claude first, then press ${KEYS.check}.`);
   } else if (text.length > 8000) {
-    message = "That's a lot of text, so the message box probably wasn't focused. Click into Claude's message box, then press Alt+Enter.";
-    rtf = messageRtf("That's a lot of text", "The message box probably wasn't focused. Click into Claude's message box, then press Alt+Enter.", { theme });
-    panel = panelMessage("That's a lot of text", "The message box probably wasn't focused. Click into Claude's message box, then press Alt+Enter.");
+    message = `That's a lot of text, so the message box probably wasn't focused. Click into Claude's message box, then press ${KEYS.check}.`;
+    rtf = messageRtf("That's a lot of text", `The message box probably wasn't focused. Click into Claude's message box, then press ${KEYS.check}.`, { theme });
+    panel = panelMessage("That's a lot of text", `The message box probably wasn't focused. Click into Claude's message box, then press ${KEYS.check}.`);
   } else {
     try {
       const answer = await runClaude(checkSpec(cfg), `<prompt>\n${proseForCheck(text)}\n</prompt>`, { timeoutMs: CHECK_TIMEOUT_MS });
@@ -886,8 +892,8 @@ function cmdApply(args) {
   try {
     last = JSON.parse(fs.readFileSync(LAST_CHECK_FILE, 'utf8'));
   } catch {
-    fs.writeFileSync(`${opts.out}.json`, JSON.stringify(panelMessage('Nothing to apply yet', 'Press Alt+Enter in Claude to check your message first.')));
-    return status(false, 'Nothing to apply yet. Press Alt+Enter in Claude to check your message.');
+    fs.writeFileSync(`${opts.out}.json`, JSON.stringify(panelMessage('Nothing to apply yet', `Press ${KEYS.check} in Claude to check your message first.`)));
+    return status(false, `Nothing to apply yet. Press ${KEYS.check} in Claude to check your message.`);
   }
   // Redraw the check with each fix's state for `draft`, and say what happened.
   const respond = (ok, message, draft) => {
@@ -919,10 +925,10 @@ function cmdApply(args) {
     const html = editDraftHtml(rich, fix.index, fix.index + fix.length, fix.replacement) ?? draftToHtml(text, rich.chips);
     fs.writeFileSync(`${opts.out}.cfhtml`, cfHtml(html));
   }
-  respond(true, `Applied fix ${index}. Ctrl+Z in Claude undoes it.`, text);
+  respond(true, `Applied fix ${index}. ${KEYS.undo} in Claude undoes it.`, text);
 }
 
-// Start the helper (if needed) with a check ready, so the next Alt+Enter is quick.
+// Start the helper (if needed) with a check ready, so the next check is quick.
 async function cmdWarm() {
   const spec = checkSpec(loadConfig());
   try {

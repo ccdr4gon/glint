@@ -10,7 +10,7 @@
     {
       "name": "glint",
       "source": "./plugins/glint",
-      "description": "Grammar lint for your prompts: check their English before sending (Alt+Enter), with phrase lookups and a mistake journal"
+      "description": "Grammar lint for your prompts: check their English before sending (Alt+Enter, or ⌘Enter on a Mac), with phrase lookups and a mistake journal"
     }
   ]
 }

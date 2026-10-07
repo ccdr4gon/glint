@@ -12,3 +12,6 @@ node_modules/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# The macOS panel, built by tools/glint/mac/build.sh
+tools/glint/mac/build/
