@@ -492,6 +492,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
   }
   var fixHtml: Data?                    // the same as HTML, which keeps lists and /command chips
   var claudeApp: NSRunningApplication?  // the Claude the draft came from
+  var previousApp: NSRunningApplication?  // the last app in front other than Glint
   var showingCheck = false              // the panel shows a check result (hidden again when you send)
   var lastState = "{\"view\":\"welcome\"}"  // the page's current state, as JSON
   var pageReady = false
@@ -635,7 +636,9 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     panel.level = .floating
     panel.hidesOnDeactivate = false
     panel.isReleasedWhenClosed = false
-    panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+    // On every desktop (Space) and over Claude in full screen: shown without being activated, the panel
+    // would otherwise stay on the desktop it was first shown on.
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     panel.isOpaque = false
     panel.backgroundColor = .clear
     if let theme { panel.appearance = NSAppearance(named: theme == "dark" ? .darkAqua : .aqua) }
@@ -685,10 +688,17 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
   }
 
-  // Hide the panel, and give the keyboard back to the app before it.
+  // Hide the panel, and give the keyboard back to the app before it. (Not by hiding Glint: a hidden
+  // app's panel can't come back until the app is unhidden, which can make the next ⌘Enter show nothing.)
   func hidePanel() {
     panel.orderOut(nil)
-    if NSApp.isActive { NSApp.hide(nil) }
+    guard NSApp.isActive else { return }
+    if let app = previousApp, !app.isTerminated {
+      if #available(macOS 14, *) { NSApp.yieldActivation(to: app) }
+      app.activate(options: [])
+    } else {
+      NSApp.hide(nil)
+    }
   }
 
   func toggle() {
@@ -806,6 +816,10 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     post("{type: 'close'}")
     await pause(0.8)
     writeLog("selftest: after close, visible = \(isShown)")
+    // a check brings the closed panel back, on this desktop (the fake claude answers it)
+    startJob("check", "the build got error, what to do next?")
+    await pause(3)
+    writeLog("selftest: after check, visible = \(isShown), on this desktop = \(panel.isOnActiveSpace), state = \(lastState.prefix(40))")
     writeLog("selftest: done")
   }
 
@@ -887,6 +901,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
   func setFrontApp(_ app: NSRunningApplication?) {
     let isClaude = app?.bundleIdentifier == CLAUDE_APP
     keyState.update { $0.claudeInFront = isClaude }
+    if let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = app }
   }
 
   @objc func panelKeyChanged() {
@@ -914,6 +929,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     claudeApp = NSWorkspace.shared.frontmostApplication
     waitForModifiersUp()
     let draft = copyDraft()
+    writeLog("⌘Enter: checking \(draft.text.count) characters")
     startJob("check", draft.text, html: draft.html)
   }
 
@@ -1023,7 +1039,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     fixHtml = nil  // gate mode only has the prompt's text
     render(messageState("Prompt held back", text), status: "Fix it, or press ⌥F. Then send again.")
     showingCheck = true
-    if !isShown { showPanel() }  // keep the focus in Claude's message box
+    showPanel()  // in front, even if it was behind Claude; the focus stays in Claude's message box
   }
 
   // ---------- running checks and lookups ----------
@@ -1049,7 +1065,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
     render(kind == "check" ? "{\"view\":\"checking\"}"
       : "{\"view\":\"lookup\",\"question\":\(jsonString(text)),\"answer\":\"\",\"streaming\":true,\"canUseFix\":false}")
-    if kind == "check" && !isShown { showPanel() }  // keep the focus in Claude's message box
+    if kind == "check" { showPanel() }  // in front, even if it was behind Claude; the focus stays in Claude
     let node = nodeProcess(args + ["--out", job.output])
     do {
       try node.run()

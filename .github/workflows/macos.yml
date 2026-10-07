@@ -47,3 +47,4 @@ jobs:
           grep -q 'selftest: after ask, state = {"view":"lookup"' "$GLINT_HOME/panel.log"
           grep -q 'status: Open Claude first.' "$GLINT_HOME/panel.log"
           grep -q 'selftest: after close, visible = false' "$GLINT_HOME/panel.log"
+          grep -q 'selftest: after check, visible = true, on this desktop = true, state = {"view":"check"' "$GLINT_HOME/panel.log"

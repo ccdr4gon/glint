@@ -123,7 +123,7 @@ Alt+Enter only works in the Claude desktop app. In a terminal, use `/glint:check
 
 ## The Glint panel on macOS
 
-`tools/glint/mac/build/Glint.app` shows the same panel page in a window with macOS's own frosted glass behind it. It lives in the menu bar, not the Dock. Drag the title bar to move it, drag an edge to resize it, and use the pin and × as on Windows.
+`tools/glint/mac/build/Glint.app` shows the same panel page in a window with macOS's own frosted glass behind it. It lives in the menu bar, not the Dock, and shows on whichever desktop (Space) you're on, over Claude in full screen too. Drag the title bar to move it, drag an edge to resize it, and use the pin and × as on Windows.
 
 | Key or button | What it does |
 |---|---|
