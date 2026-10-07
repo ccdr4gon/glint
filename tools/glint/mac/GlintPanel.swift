@@ -856,6 +856,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
     keyState.update { $0.tap = tap }
     let thread = Thread {
+      guard let tap = keyState.get.tap else { return }
       CFRunLoopAddSource(CFRunLoopGetCurrent(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0), .commonModes)
       CGEvent.tapEnable(tap: tap, enable: true)
       CFRunLoopRun()
