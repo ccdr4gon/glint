@@ -279,11 +279,16 @@ IsShown() {
 ShowPanel(activate := false) {
     if DllCall("IsIconic", "Ptr", g.Hwnd)
         DllCall("ShowWindow", "Ptr", g.Hwnd, "Int", 4)  ; SW_SHOWNOACTIVATE brings a minimized panel back
-    ; Shown in front of Claude, and on top again if pinned (Show desktop can take it off the top),
-    ; without taking the focus. (Not ShowWindow: its first call in a program started from Explorer
-    ; can activate the window anyway.)
-    DllCall("SetWindowPos", "Ptr", g.Hwnd, "Ptr", pinned ? -1 : 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0
-        , "UInt", 0x53)  ; HWND_TOPMOST or HWND_TOP; SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE
+    ; Shown in front of Claude without taking the focus, and on top again if pinned (Show desktop can
+    ; take it off the top). (Not ShowWindow: its first call in a program started from Explorer can
+    ; activate the window anyway.) HWND_TOP doesn't reliably lift a window above the active one (Claude)
+    ; from another app, so an unpinned panel goes on top for a moment and then off again: that leaves
+    ; it at the top of the normal windows, in front of Claude, free to go behind other windows later.
+    DllCall("SetWindowPos", "Ptr", g.Hwnd, "Ptr", -1, "Int", 0, "Int", 0, "Int", 0, "Int", 0
+        , "UInt", 0x53)  ; HWND_TOPMOST; SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE
+    if !pinned
+        DllCall("SetWindowPos", "Ptr", g.Hwnd, "Ptr", -2, "Int", 0, "Int", 0, "Int", 0, "Int", 0
+            , "UInt", 0x13)  ; HWND_NOTOPMOST; SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE
     DllCall("SendMessage", "Ptr", g.Hwnd, "UInt", 0x86, "Ptr", 1, "Ptr", 0)  ; WM_NCACTIVATE: look active, for the Acrylic
     if activate
         WinActivate("ahk_id " g.Hwnd)
