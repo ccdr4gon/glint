@@ -101,7 +101,7 @@ claudeHwnd := 0                 ; the Claude window the draft came from
 showingCheck := false           ; the panel shows a check result (hidden again when you send)
 lastState := '{"view":"welcome"}'  ; the page's current state, as JSON
 pageReady := false
-pinned := true                  ; always on top (the pin in the title bar)
+pinned := false                 ; always on top (the pin in the title bar): off at first
 SELFTEST := HasArg("--selftest")
 lastFeedback := ReadText(FEEDBACK_FILE)  ; don't show feedback from before the panel started
 lastTips := ReadText(TIPS_FILE)
@@ -110,7 +110,7 @@ CloseOtherWindow("glint-window.ahk")
 
 ; ---------- window ----------
 ; No minimize box: a click on its taskbar button or Win+M can't minimize it out of sight.
-g := Gui("+AlwaysOnTop -Caption +Resize -MaximizeBox -MinimizeBox -DPIScale +MinSize" S(420) "x" S(330), "Glint")
+g := Gui("-Caption +Resize -MaximizeBox -MinimizeBox -DPIScale +MinSize" S(420) "x" S(330), "Glint")
 g.BackColor := "000000"  ; black under a frame extended over the whole window = see-through to the Acrylic
 OnMessage(0x83, NcCalcSize)  ; WM_NCCALCSIZE
 OnMessage(0x84, NcHitTest)   ; WM_NCHITTEST
@@ -339,7 +339,7 @@ OnPageLoaded(sender, args) {
     Log("page loaded: success=" args.IsSuccess " error=" args.WebErrorStatus " bounds=" BoundsText())
     global pageReady := true
     Js("window.glint.setTheme(" JsonString(THEME) "); window.glint.setGlass(" (GLASS ? "true" : "false") ")")
-    Render(lastState)
+    Js("window.glint.render(Object.assign(" lastState ", {pinned: " (pinned ? "true" : "false") "}))")  ; the page's pin starts on
     if SELFTEST
         SetTimer(RunSelfTest, -500)
 }
@@ -349,12 +349,12 @@ RunSelfTest() {
     post(message) => Js("window.chrome.webview.postMessage(" message ")")
     onTop() => (WinGetExStyle("ahk_id " g.Hwnd) & 0x8) ? 1 : 0  ; WS_EX_TOPMOST
     Log("selftest: start, on top = " onTop())
-    post("{type: 'pin', on: false}")
-    Sleep(600)
-    Log("selftest: after pin off, on top = " onTop())
     post("{type: 'pin', on: true}")
     Sleep(600)
     Log("selftest: after pin on, on top = " onTop())
+    post("{type: 'pin', on: false}")
+    Sleep(600)
+    Log("selftest: after pin off, on top = " onTop())
     ; quotes, a new line and a Chinese character, to exercise the JSON decoding
     post("{type: 'ask', text: ['is ', 'revert back', ' correct?'].join(String.fromCharCode(34)) + String.fromCharCode(10, 0x5e2e)}")
     Sleep(4000)
@@ -533,8 +533,7 @@ WatchFeedback() {
     fixHtml := ""  ; gate mode only has the prompt's text
     Render(MessageState("Prompt held back", text), "Fix it, or press Alt+F. Then send again.")
     showingCheck := true
-    if !IsShown()
-        ShowPanel()  ; keep the focus in Claude's message box
+    ShowPanel()  ; in front, even if it was behind Claude; the focus stays in Claude's message box
 }
 
 ; ---------- running checks and lookups ----------
@@ -551,8 +550,8 @@ StartJob(kind, text, html := "") {
         WriteBuffer(job.in ".html", html)
     Render(kind = "check" ? '{"view":"checking"}'
         : '{"view":"lookup","question":' JsonString(text) ',"answer":"","streaming":true,"canUseFix":false}')
-    if (kind = "check" && !IsShown())
-        ShowPanel()  ; keep the focus in Claude's message box
+    if (kind = "check")
+        ShowPanel()  ; in front, even if it was behind Claude; the focus stays in Claude's message box
     Run(Format('"{1}" "{2}" {3} --in "{4}"{5} --out "{6}"', NODE, GLINT, kind, job.in, HtmlArg(job.in ".html"), job.out), A_Temp, "Hide", &pid)
     job.pid := pid
     SetTimer(Poll, 150)

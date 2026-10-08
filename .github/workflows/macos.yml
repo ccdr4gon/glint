@@ -43,6 +43,8 @@ jobs:
           done
           kill "$pid" || true
           cat "$GLINT_HOME/panel.log"
+          grep -q 'selftest: start, on top = 0' "$GLINT_HOME/panel.log"
+          grep -q 'selftest: after pin on, on top = 1' "$GLINT_HOME/panel.log"
           grep -q 'selftest: after pin off, on top = 0' "$GLINT_HOME/panel.log"
           grep -q 'selftest: after ask, state = {"view":"lookup"' "$GLINT_HOME/panel.log"
           grep -q 'status: Open Claude first.' "$GLINT_HOME/panel.log"

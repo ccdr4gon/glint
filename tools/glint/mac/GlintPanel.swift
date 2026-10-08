@@ -496,7 +496,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
   var showingCheck = false              // the panel shows a check result (hidden again when you send)
   var lastState = "{\"view\":\"welcome\"}"  // the page's current state, as JSON
   var pageReady = false
-  var pinned = true                     // always on top (the pin in the title bar)
+  var pinned = false                    // always on top (the pin in the title bar): off at first
   var atLogin = false
   var tempCount = 0
   let selftest = hasArg("--selftest")
@@ -633,7 +633,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
       panel.standardWindowButton(button)?.isHidden = true
     }
     panel.minSize = NSSize(width: 420, height: 330)
-    panel.level = .floating
+    panel.level = pinned ? .floating : .normal
     panel.hidesOnDeactivate = false
     panel.isReleasedWhenClosed = false
     // On every desktop (Space) and over Claude in full screen: shown without being activated, the panel
@@ -745,7 +745,7 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     pageReady = true
     if let theme { js("window.glint.setTheme(\(jsonString(theme)))") }
     updateGlass()
-    render(lastState)
+    js("window.glint.render(Object.assign(\(lastState), {pinned: \(pinned)}))")  // the page's pin starts on
     if selftest { Task { await runSelfTest() } }
   }
 
@@ -801,12 +801,12 @@ final class Glint: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
     let onTop = { self.panel.level == .floating ? 1 : 0 }
     writeLog("selftest: start, on top = \(onTop())")
-    post("{type: 'pin', on: false}")
-    await pause(0.6)
-    writeLog("selftest: after pin off, on top = \(onTop())")
     post("{type: 'pin', on: true}")
     await pause(0.6)
     writeLog("selftest: after pin on, on top = \(onTop())")
+    post("{type: 'pin', on: false}")
+    await pause(0.6)
+    writeLog("selftest: after pin off, on top = \(onTop())")
     // quotes, a new line and a Chinese character, to exercise the JSON decoding
     post("{type: 'ask', text: ['is ', 'revert back', ' correct?'].join(String.fromCharCode(34)) + String.fromCharCode(10, 0x5e2e)}")
     await pause(4)

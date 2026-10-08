@@ -91,7 +91,7 @@ Then restart the panel: double-click the `.ahk` file again on Windows. On a Mac,
 
 ## The Glint panel
 
-`tools/glint/glint-panel.ahk` is a frameless, always-on-top panel with Windows 11 Acrylic behind it. It shows the design from Claude Design (`design/`), with its own title bar: drag it to move the panel, use the pin to turn always-on-top on or off, and × to hide the panel. Drag any edge or corner to resize it.
+`tools/glint/glint-panel.ahk` is a frameless panel with Windows 11 Acrylic behind it. It shows the design from Claude Design (`design/`), with its own title bar: drag it to move the panel, use the pin to keep it on top of other windows, and × to hide the panel. Drag any edge or corner to resize it. The pin starts off: each check brings the panel to the front, and it can then go behind other windows.
 
 | Key or button | What it does |
 |---|---|
